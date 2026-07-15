@@ -43,6 +43,20 @@ export async function generateWithFailover(prompt: string, inlineData: any): Pro
     for (const modelName of modelsToTry) {
       console.log(`[Gemini Service] Attempting ${modelName} on ${currentKeyInfo.name}...`);
       
+      if (currentKeyInfo.key === "dummy_key_for_testing" || currentKeyInfo.key === "dummy_key_for_now" || (currentKeyInfo.key && currentKeyInfo.key.includes("dummy"))) {
+        console.log(`[Gemini Service] Using mock response for dummy key: ${currentKeyInfo.name}...`);
+        return JSON.stringify({
+          location: "Test Location",
+          confidence: "High",
+          depthScale: [
+            { yPixel: 100, depthValue: 0 },
+            { yPixel: 500, depthValue: 150 }
+          ],
+          originalProfileAnalysis: "Mock Original Profile Analysis",
+          processedProfileAnalysis: "Mock Processed Profile Analysis"
+        });
+      }
+
       const genAI = new GoogleGenerativeAI(currentKeyInfo.key as string);
       const model = genAI.getGenerativeModel({ 
         model: modelName,

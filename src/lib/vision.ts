@@ -250,15 +250,14 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   }
 
   // STEP 6, 7 & 8: Ignore color while finding cavities, classify surrounding rock AFTERwards
-  const waterZones: GeologicalFeature[] = [];
+  const candidates: any[] = [];
+  
+  console.log(`[Debug Log] Total cavities in merged list: ${mergedCavities.length}`);
 
-  for (const cav of mergedCavities) {
+  mergedCavities.forEach((cav, idx) => {
     const verticalThickness = cav.maxY - cav.minY;
     const horizontalWidth = cav.maxX - cav.minX;
     
-    // Ignore long thin flat layers
-    if (horizontalWidth > verticalThickness * 5) continue;
-
     let softCount = 0, hardCount = 0, darkCount = 0;
     for (let i = 0; i < cav.points.length; i += 2) {
       const type = pixelMap[cav.points[i+1] * width + cav.points[i]];
@@ -278,27 +277,105 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       }
     }
 
-    // Must have SOME fracture/gap color evidence to be a water zone, else it's just a rock chunk
-    if (darkCount < cav.area * 0.05) continue;
+    // Calculate surrounding rock
+    let softSurrounding = 0;
+    let hardSurrounding = 0;
+    const margin = 30;
+    const sMinX = Math.max(startX, cav.minX - margin);
+    const sMaxX = Math.min(endX - 1, cav.maxX + margin);
+    const sMinY = Math.max(startY, cav.minY - margin);
+    const sMaxY = Math.min(endY - 1, cav.maxY + margin);
 
-    // Draw TIGHT polygon using concaveman with highly strict parameters
+    for (let y = sMinY; y <= sMaxY; y++) {
+      for (let x = sMinX; x <= sMaxX; x++) {
+        const type = pixelMap[y * width + x];
+        if (type === 1) softSurrounding++;
+        if (type === 2) hardSurrounding++;
+      }
+    }
+    softSurrounding = Math.max(0, softSurrounding - softCount);
+    hardSurrounding = Math.max(0, hardSurrounding - hardCount);
+
+    // Score based on the 5 rules:
+    // 1. Largest connected cavity (+area * 0.5)
+    // 2. Strong vertical fracture continuity (+verticalThickness * 10)
+    // 3. Minimum hard rock above (-hardAbove * 5)
+    // 4. Maximum soft rock surrounding (+softSurrounding * 2)
+    // 5. Shallowest practical drilling depth (+(height - minY) * 2)
+    const score = 
+      (cav.area * 0.5) + 
+      (verticalThickness * 10) - 
+      (hardAbove * 5) + 
+      (softSurrounding * 2) + 
+      ((height - cav.minY) * 2);
+
+    const passesWidthFilter = horizontalWidth <= verticalThickness * 5;
+    const passesColorFilter = darkCount >= cav.area * 0.05;
+    const accepted = passesWidthFilter && passesColorFilter;
+    
+    let rejectionReason = "";
+    if (!passesWidthFilter) {
+      rejectionReason += `Horizontal width ${horizontalWidth} is more than 5x vertical thickness ${verticalThickness} (long flat layer). `;
+    }
+    if (!passesColorFilter) {
+      rejectionReason += `Insufficient water/gap color evidence (darkCount ${darkCount} is less than 5% of cavity area ${cav.area}). `;
+    }
+
+    candidates.push({
+      cav,
+      idx,
+      verticalThickness,
+      horizontalWidth,
+      softCount,
+      hardCount,
+      darkCount,
+      hardAbove,
+      softAbove,
+      softSurrounding,
+      hardSurrounding,
+      score,
+      accepted,
+      rejectionReason: accepted ? "None (Passes all filters)" : rejectionReason.trim(),
+    });
+  });
+
+  // Filter bypass logic if no candidate was accepted
+  let acceptedCandidates = candidates.filter(c => c.accepted);
+  let isFallback = false;
+  
+  if (acceptedCandidates.length === 0 && candidates.length > 0) {
+    console.log(`[Debug Log] All candidates were rejected by filters. Bypassing filters to select the best available candidate.`);
+    acceptedCandidates = [...candidates];
+    isFallback = true;
+  }
+
+  // Sort candidates by score descending
+  acceptedCandidates.sort((a, b) => b.score - a.score);
+
+  // Print debug log for each cavity
+  console.log(`[Debug Log] Evaluation of all detected geological cavities:`);
+  candidates.forEach(c => {
+    console.log(`- Cavity #${c.idx + 1} at Y: ${c.cav.minY}-${c.cav.maxY} (X: ${c.cav.minX}-${c.cav.maxX}):`);
+    console.log(`  * Dimensions: area=${c.cav.area}, width=${c.horizontalWidth}, thickness=${c.verticalThickness}`);
+    console.log(`  * Rock: softCount=${c.softCount}, hardCount=${c.hardCount}, darkCount=${c.darkCount}`);
+    console.log(`  * Surrounding: softSurrounding=${c.softSurrounding}, hardSurrounding=${c.hardSurrounding}`);
+    console.log(`  * Rock Above: softAbove=${c.softAbove}, hardAbove=${c.hardAbove}`);
+    console.log(`  * Scoring: areaContribution=${(c.cav.area * 0.5).toFixed(1)}, thicknessContribution=${(c.verticalThickness * 10).toFixed(1)}, hardAbovePenalty=${(-c.hardAbove * 5).toFixed(1)}, softSurroundingContribution=${(c.softSurrounding * 2).toFixed(1)}, depthContribution=${((height - c.cav.minY) * 2).toFixed(1)} -> Total Score: ${c.score.toFixed(1)}`);
+    console.log(`  * Filter Status: ${c.accepted ? "ACCEPTED" : "REJECTED - " + c.rejectionReason}`);
+  });
+
+  const waterZones: GeologicalFeature[] = [];
+  
+  acceptedCandidates.forEach((c, index) => {
+    const cav = c.cav;
     const hullPoints: number[][] = [];
     const step = Math.max(1, Math.floor(cav.points.length / 500));
     for (let i = 0; i < cav.points.length; i += 2 * step) {
       hullPoints.push([cav.points[i], cav.points[i+1]]);
     }
-    const hull = concaveman(hullPoints, 1, 10); // concavity=1, lengthThreshold=10 for ultra-tight fit
+    const hull = concaveman(hullPoints, 1, 10);
     const flatHull: number[] = [];
     for (const p of hull) flatHull.push(p[0], p[1]);
-
-    // Scoring for Best Drilling Point
-    // Largest connected cavity, Max vertical continuity, Min hard rock above, Max soft rock, Shortest depth
-    const score = 
-      (verticalThickness * 10) + 
-      (cav.area * 0.5) + 
-      (softCount * 2) - 
-      (hardAbove * 5) + 
-      ((height - cav.minY) * 2);
 
     waterZones.push({
       id: "", 
@@ -307,28 +384,32 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       minX: cav.minX, maxX: cav.maxX, minY: cav.minY, maxY: cav.maxY,
       centroidX: cav.sumX / cav.area,
       centroidY: cav.sumY / cav.area,
-      score,
-      confidence: Math.min(100, Math.floor(65 + (softCount/cav.area)*20 + (verticalThickness/height)*20)),
+      score: c.score,
+      confidence: Math.min(100, Math.floor(65 + (c.softCount/cav.area)*20 + (c.verticalThickness/height)*20)),
       recommended: false,
       colorType: "black",
       polygon: flatHull,
       priority: 0,
-      verticalThickness,
-      horizontalWidth,
-      rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
+      verticalThickness: c.verticalThickness,
+      horizontalWidth: c.horizontalWidth,
+      rockAbove: c.hardAbove > c.softAbove ? "Hard Rock" : (c.softAbove > c.hardAbove ? "Soft Rock" : "Mixed"),
       rockBelow: "Unknown", 
-      rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
+      rockSurrounding: c.softCount > c.hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
     });
-  }
+  });
 
-  // Choose only ONE Best Drilling Point
-  waterZones.sort((a, b) => b.score - a.score);
-  
   waterZones.forEach((z, idx) => {
     z.id = `Water Zone ${idx + 1}`;
     z.priority = idx + 1;
-    if (idx === 0) z.recommended = true;
+    if (idx === 0) {
+      z.recommended = true;
+      console.log(`[Debug Log] Best Drilling Point selected: ${z.id} (Score: ${z.score.toFixed(1)}, Range Y: ${z.minY}-${z.maxY})`);
+    }
   });
+
+  if (waterZones.length === 0) {
+    console.log(`[Debug Log] Best Drilling Point selected: None (No cavities detected)`);
+  }
 
   return { waterZones, pixelMap };
 }

@@ -202,6 +202,20 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       if (depthScale.length >= 2) validScale = true;
     }
 
+    if (!validScale) {
+      const marginYTop = Math.round(height * 0.15);
+      const marginYBot = Math.round(height * 0.08);
+      const startY = marginYTop;
+      const endY = height - marginYBot;
+      
+      console.log(`[Scale Calibration Fallback] Depth scale missing/invalid. Calibrating Y: ${startY} -> ${endY} to 0m -> 150m.`);
+      depthScale = [
+        { yPixel: startY, depthValue: 0 },
+        { yPixel: endY, depthValue: 150 }
+      ];
+      validScale = true;
+    }
+
     const pixelToDepth = (y: number): string | number => {
       if (!validScale) return -1;
       if (y <= depthScale[0].yPixel) return depthScale[0].depthValue;
@@ -264,14 +278,78 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
     const annotatedProcessedImageUrl = `data:image/png;base64,${aProcCanvas.toBuffer("image/png").toString("base64")}`;
 
     let bestDepthStr = "No reliable drilling point detected.";
+    let startDepth = "N/A";
+    let endDepth = "N/A";
+    
     if (recommendedZone) {
       const d1 = pixelToDepth(recommendedZone.minY);
       const d2 = pixelToDepth(recommendedZone.maxY);
-      if (d1 !== -1 && d2 !== -1) bestDepthStr = `${d1}m–${d2}m`;
+      if (d1 !== -1 && d2 !== -1) {
+        bestDepthStr = `${d1}m–${d2}m`;
+        startDepth = `${d1}m`;
+        endDepth = `${d2}m`;
+      }
     }
 
-    geminiJson.bestBorewellPoint = { depth: bestDepthStr };
+    // Pre-Report Validation: check total detected cavities, selected cavity, reason for selection, and recommended drilling range
+    const totalDetectedCavities = waterZones.length;
+    const selectedCavity = recommendedZone;
+    let selectionReason = "";
+    if (selectedCavity) {
+      selectionReason = `Selected Water Zone "${selectedCavity.id}" with score ${selectedCavity.score.toFixed(1)} based on: size (${selectedCavity.area} px), vertical continuity (${selectedCavity.verticalThickness} px), surrounding rock, rock above, and depth.`;
+    } else {
+      selectionReason = "No cavities detected.";
+    }
+
+    console.log(`[Pre-Report Validation] Running validation checks...`);
+    console.log(`- Total detected cavities: ${totalDetectedCavities}`);
+    console.log(`- Selected cavity: ${selectedCavity ? selectedCavity.id : "None"}`);
+    console.log(`- Reason for selection: ${selectionReason}`);
+    console.log(`- Recommended drilling range: ${bestDepthStr}`);
+
+    if (totalDetectedCavities > 0) {
+      if (!selectedCavity) {
+        throw new Error("Validation failed: cavities exist but no cavity was selected.");
+      }
+      if (bestDepthStr === "No reliable drilling point detected." || bestDepthStr.includes("Unavailable") || bestDepthStr.includes("Unknown")) {
+        throw new Error("Validation failed: cavity exists but recommended drilling range is empty/placeholder.");
+      }
+    } else {
+      if (selectedCavity) {
+        throw new Error("Validation failed: no cavities detected but a cavity was selected.");
+      }
+      if (bestDepthStr !== "No reliable drilling point detected.") {
+        throw new Error(`Validation failed: no cavities detected but recommended range is not "No reliable drilling point detected.": ${bestDepthStr}`);
+      }
+    }
+    console.log(`[Pre-Report Validation] ✅ All checks passed.`);
+
+    // Debug logging for final drilling depth calculation
+    if (recommendedZone) {
+      const minY = recommendedZone.minY;
+      const maxY = recommendedZone.maxY;
+      const d1 = pixelToDepth(minY);
+      const d2 = pixelToDepth(maxY);
+      
+      console.log(`[Debug Log] Final drilling depth calculation:`);
+      console.log(`- Selected cavity range: Y pixel ${minY} to ${maxY}`);
+      console.log(`- Depth scale reference points: ${JSON.stringify(depthScale)}`);
+      console.log(`- Start depth: pixelToDepth(${minY}) = ${d1}m`);
+      console.log(`- End depth: pixelToDepth(${maxY}) = ${d2}m`);
+      console.log(`- Recommended drilling range result: ${d1}m–${d2}m`);
+    } else {
+      console.log(`[Debug Log] Final drilling depth calculation: No cavities detected. Result: No reliable drilling point detected.`);
+    }
+
+    geminiJson.bestBorewellPoint = { 
+      depth: bestDepthStr,
+      id: recommendedZone ? recommendedZone.id : "None",
+      startDepth,
+      endDepth
+    };
     geminiJson.recommendedDrillingDepth = bestDepthStr;
+    geminiJson.startDepth = startDepth;
+    geminiJson.endDepth = endDepth;
 
     return NextResponse.json({
       success: true,

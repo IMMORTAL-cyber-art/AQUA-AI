@@ -68,6 +68,12 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
 
   const surveyDate = new Date().toLocaleDateString();
 
+  const hasDrillingPoint = parsedData.recommendedDrillingDepth && parsedData.recommendedDrillingDepth !== "No reliable drilling point detected.";
+  const bestDrillingPointVal = hasDrillingPoint ? (parsedData.bestBorewellPoint?.id || "Water Zone 1") : "No reliable drilling point detected.";
+  const recommendedRangeVal = parsedData.recommendedDrillingDepth || parsedData.bestBorewellPoint?.depth || "N/A";
+  const startDepthVal = hasDrillingPoint ? (parsedData.startDepth || parsedData.bestBorewellPoint?.startDepth || "N/A") : "N/A";
+  const endDepthVal = hasDrillingPoint ? (parsedData.endDepth || parsedData.bestBorewellPoint?.endDepth || "N/A") : "N/A";
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-8">
       <div className="max-w-5xl mx-auto mb-6 flex justify-between items-center">
@@ -137,14 +143,26 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
         <div id="section-analysis" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
           <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>6. Geological Analysis</h2>
           
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+            <Card style={{ borderColor: '#e2e8f0' }}>
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Best Drilling Point</CardTitle></CardHeader>
+              <CardContent><span className="text-lg font-bold text-slate-800">{bestDrillingPointVal}</span></CardContent>
+            </Card>
             <Card style={{ borderColor: '#e2e8f0' }}>
               <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Recommended Drilling Range</CardTitle></CardHeader>
-              <CardContent><span className="text-2xl font-bold text-green-700">{parsedData.recommendedDrillingDepth || parsedData.bestBorewellPoint?.depth || "N/A"}</span></CardContent>
+              <CardContent><span className="text-lg font-bold text-green-700">{recommendedRangeVal}</span></CardContent>
+            </Card>
+            <Card style={{ borderColor: '#e2e8f0' }}>
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Start Depth</CardTitle></CardHeader>
+              <CardContent><span className="text-lg font-bold text-blue-700">{startDepthVal}</span></CardContent>
+            </Card>
+            <Card style={{ borderColor: '#e2e8f0' }}>
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">End Depth</CardTitle></CardHeader>
+              <CardContent><span className="text-lg font-bold text-blue-700">{endDepthVal}</span></CardContent>
             </Card>
             <Card style={{ borderColor: '#e2e8f0' }}>
               <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Confidence</CardTitle></CardHeader>
-              <CardContent><span className="text-2xl font-bold text-blue-700">{parsedData.confidence || "N/A"}</span></CardContent>
+              <CardContent><span className="text-lg font-bold text-purple-700">{parsedData.confidence || "N/A"}</span></CardContent>
             </Card>
           </div>
 
