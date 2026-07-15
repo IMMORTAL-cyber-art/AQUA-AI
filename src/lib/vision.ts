@@ -386,37 +386,3 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
 
   return features;
 }
-
-/**
- * Generate a binary detection mask image for debugging.
- * Returns raw RGBA pixel data (width x height x 4).
- */
-export function generateDetectionMask(imageData: ImageData, width: number, height: number): Uint8Array {
-  const data = imageData.data;
-  const startY = Math.round(height * 0.2);
-  const out = new Uint8Array(width * height * 4);
-
-  // Fill with white
-  for (let i = 0; i < out.length; i += 4) {
-    out[i] = 255; out[i+1] = 255; out[i+2] = 255; out[i+3] = 255;
-  }
-
-  for (let y = startY; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      const pIdx = idx * 4;
-      const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
-      const [h, s, l] = rgbToHsl(r, g, b);
-
-      const oIdx = idx * 4;
-      if (l < 25 || (b > r + 30 && b > g + 30 && l < 40) || (h >= 200 && h <= 280 && l < 35)) {
-        out[oIdx] = 30; out[oIdx+1] = 64; out[oIdx+2] = 175; out[oIdx+3] = 255; // Blue = water gap
-      } else if (h >= 70 && h <= 170 && s > 20 && l > 20) {
-        out[oIdx] = 34; out[oIdx+1] = 197; out[oIdx+2] = 94; out[oIdx+3] = 255; // Green = soft rock
-      } else if ((h < 60 || h > 330) && s > 30 && l > 30) {
-        out[oIdx] = 234; out[oIdx+1] = 138; out[oIdx+2] = 36; out[oIdx+3] = 255; // Orange = hard rock
-      }
-    }
-  }
-  return out;
-}

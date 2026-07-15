@@ -12,7 +12,6 @@ export default function Home() {
         report={{
           customerName: reportData.customerName,
           originalImage: reportData.originalImage,
-          maskImage: reportData.maskImage,
           annotatedImage: reportData.annotatedImage,
           processedImage: reportData.processedImage,
           features: reportData.features,

@@ -24,7 +24,7 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
       const marginY = 20;
       const renderWidth = pdfWidth - marginX * 2;
       
-      const sections = ['section-original', 'section-processed', 'section-table', 'section-analysis'];
+      const sections = ['section-original', 'section-processed', 'section-analysis'];
       let hasAddedFirstPage = false;
       
       for (const sectionId of sections) {
@@ -106,26 +106,6 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
         </div>
 
         {/* ============================== */}
-        {/* SECTION 1.5: BINARY DETECTION MASK */}
-        {/* ============================== */}
-        {report.maskImage && (
-          <div id="section-mask" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-            <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>Binary Detection Mask</h2>
-            <p className="text-sm mb-4" style={{ color: '#64748b' }}>
-              Computer Vision debug view showing raw segmented features before morphological processing and ellipse fitting.
-            </p>
-            <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0', backgroundColor: '#fff' }}>
-              <img
-                src={report.maskImage}
-                alt="Binary Detection Mask"
-                className="w-full h-auto object-contain block"
-                crossOrigin="anonymous"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* ============================== */}
         {/* SECTION 2: AI PROCESSED DETECTION MAP */}
         {/* ============================== */}
         <div id="section-processed" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
@@ -172,54 +152,6 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
           </div>
         </div>
 
-        {/* ============================== */}
-        {/* SECTION 3: DETECTION TABLE */}
-        {/* ============================== */}
-        <div id="section-table" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>Detected Geological Features</h2>
-          <div className="overflow-x-auto border rounded" style={{ borderColor: '#e2e8f0' }}>
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs uppercase bg-slate-100" style={{ color: '#475569' }}>
-                <tr>
-                  <th className="px-4 py-3">ID</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Depth</th>
-                  <th className="px-4 py-3">Width</th>
-                  <th className="px-4 py-3">Confidence</th>
-                  <th className="px-4 py-3">Score</th>
-                  <th className="px-4 py-3">Recommended</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.features && report.features.length > 0 ? (
-                  report.features.map((f: any, idx: number) => (
-                    <tr key={idx} className={`border-b hover:bg-slate-50 ${f.recommended ? 'bg-green-50' : ''}`} style={{ borderColor: '#f1f5f9' }}>
-                      <td className="px-4 py-3 font-bold">{f.id}</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded text-xs font-semibold ${
-                          f.type === "Soft Rock" ? "bg-green-100 text-green-800" :
-                          f.type === "Hard Rock" ? "bg-orange-100 text-orange-800" :
-                          "bg-blue-900 text-white"
-                        }`}>
-                          {f.type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">{f.depthRange}</td>
-                      <td className="px-4 py-3">{f.widthInMeters}</td>
-                      <td className="px-4 py-3">{f.confidence}%</td>
-                      <td className="px-4 py-3 font-mono">{f.score}</td>
-                      <td className="px-4 py-3 font-bold text-center">
-                        {f.recommended ? <span className="text-green-600 text-lg">✓ Yes</span> : <span className="text-slate-400">—</span>}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr><td colSpan={7} className="px-4 py-6 text-center text-slate-500">No features detected.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
         {/* ============================== */}
         {/* SECTION 4: GEOLOGICAL SUMMARY */}

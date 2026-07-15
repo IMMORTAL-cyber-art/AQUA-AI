@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { generateWithFailover, repairAndParseJSON } from "@/lib/gemini";
-import { detectGeologicalFeatures, generateDetectionMask } from "@/lib/vision";
+import { detectGeologicalFeatures } from "@/lib/vision";
 
 const responseCache = new Map<string, any>();
 
@@ -128,15 +128,6 @@ export async function POST(req: NextRequest) {
         widthInMeters: Math.round((f.maxX - f.minX) * 0.5) + "m"
       };
     });
-
-    // --- GENERATE BINARY DETECTION MASK (debugging) ---
-    const maskPixels = generateDetectionMask(imageData, width, height);
-    const maskCanvas = createCanvas(width, height);
-    const maskCtx = maskCanvas.getContext("2d");
-    const maskImgData = maskCtx.createImageData(width, height);
-    maskImgData.data.set(maskPixels);
-    maskCtx.putImageData(maskImgData, 0, 0);
-    const maskImageUrl = `data:image/png;base64,${maskCanvas.toBuffer("image/png").toString("base64")}`;
 
     // --- GENERATE PROCESSED DETECTION MAP (overlaid on original) ---
     const mapCanvas = createCanvas(width, height);
@@ -335,7 +326,6 @@ export async function POST(req: NextRequest) {
       reportData: {
         customerName,
         originalImage: originalImageUrl,
-        maskImage: maskImageUrl,
         processedImage: processedImageUrl,
         annotatedImage: annotatedImageUrl,
         features: mappedFeatures,
