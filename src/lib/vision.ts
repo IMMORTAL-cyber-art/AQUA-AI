@@ -3,7 +3,7 @@ import concaveman from "concaveman";
 
 export interface GeologicalFeature {
   id: string;
-  type: "Soft Rock" | "Hard Rock" | "Water-Bearing Gap";
+  type: "Water-Bearing Gap";
   area: number;
   minX: number;
   maxX: number;
@@ -16,7 +16,13 @@ export interface GeologicalFeature {
   points: Int32Array;
   recommended: boolean;
   colorType: string;
-  polygon: number[]; 
+  polygon: number[];
+  priority: number;
+}
+
+export interface VisionResult {
+  waterZones: GeologicalFeature[];
+  pixelMap: Uint8Array;
 }
 
 function rgbToHsl(r: number, g: number, b: number) {
@@ -37,14 +43,14 @@ function rgbToHsl(r: number, g: number, b: number) {
   return [h * 360, s * 100, l * 100];
 }
 
-export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number): GeologicalFeature[] {
+export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number): VisionResult {
   const data = imageData.data;
-  const startY = Math.round(height * 0.2); // Skip header/surface noise
+  const startY = Math.round(height * 0.15); // Skip surface noise/header
   const totalPixels = width * height;
   
-  const pixelType = new Uint8Array(totalPixels);
+  const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=Gap(Black/Blue)
   
-  // Strict color matching
+  // 1. Contextual Classification
   for (let y = startY; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
@@ -52,32 +58,30 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
       const [h, s, l] = rgbToHsl(r, g, b);
 
-      // Light blue, very light blue, cyan, black anomaly
-      // e.g., low lightness (black/dark blue) or hue in blue/cyan range
       if (
-        l < 25 || 
-        (b > r + 20 && b > g + 20 && l < 60) || 
+        l < 25 || // Black anomaly
+        (b > r + 20 && b > g + 20 && l < 60) || // cyan / light blue
         (h >= 180 && h <= 280 && s > 20)
       ) {
-        pixelType[idx] = 3; // Water Gap
-      } else if (h >= 70 && h <= 170 && s > 20 && l > 20) {
-        pixelType[idx] = 1; // Soft Rock
-      } else if ((h < 60 || h > 330) && s > 30 && l > 30) {
-        pixelType[idx] = 2; // Hard Rock
+        pixelMap[idx] = 3; // Water Gap
+      } else if (h >= 70 && h <= 170 && s > 15 && l > 15) {
+        pixelMap[idx] = 1; // Soft Rock (Green)
+      } else if ((h < 60 || h > 330) && s > 20 && l > 20) {
+        pixelMap[idx] = 2; // Hard Rock (Orange)
       }
     }
   }
 
-  // BFS to find connected components
+  // 2. Extract ONLY Water Gaps (Enclosed anomalies)
   const visited = new Uint8Array(totalPixels);
-  const rawFeatures: any[] = [];
+  const rawGaps: any[] = [];
+  
+  const borderMargin = Math.round(width * 0.05);
 
   for (let y = startY; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
-      if (visited[idx] || pixelType[idx] === 0) continue;
-
-      const t = pixelType[idx];
+      if (visited[idx] || pixelMap[idx] !== 3) continue;
       
       const queue: [number, number][] = [[x, y]];
       visited[idx] = 1;
@@ -86,6 +90,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       let sumX = 0, sumY = 0;
       const points: number[] = [];
       let qHead = 0;
+      let touchesBorder = false;
 
       while (qHead < queue.length) {
         const [cx, cy] = queue[qHead++];
@@ -97,12 +102,16 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         if (cy < minY) minY = cy;
         if (cy > maxY) maxY = cy;
 
-        // 8-connected to merge nearby structures slightly better
+        if (cx <= borderMargin || cx >= width - borderMargin || cy >= height - borderMargin) {
+          touchesBorder = true;
+        }
+
+        // 8-connected
         for (let ny = cy - 1; ny <= cy + 1; ny++) {
           for (let nx = cx - 1; nx <= cx + 1; nx++) {
             if (nx >= 0 && nx < width && ny >= startY && ny < height) {
               const nIdx = ny * width + nx;
-              if (!visited[nIdx] && pixelType[nIdx] === t) {
+              if (!visited[nIdx] && pixelMap[nIdx] === 3) {
                 visited[nIdx] = 1;
                 queue.push([nx, ny]);
               }
@@ -111,60 +120,98 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         }
       }
 
-      // Ignore thin noise
-      if (area > (width * height * 0.001)) {
-        rawFeatures.push({ type: t, area, minX, maxX, minY, maxY, sumX, sumY, points });
+      // Ignore page borders or tiny noise
+      if (!touchesBorder && area > (width * height * 0.0005) && area < (width * height * 0.2)) {
+        
+        // Analyze surrounding geological context
+        let softRockCount = 0;
+        let hardRockCount = 0;
+        let hardRockAboveCount = 0;
+        
+        // Expand bounding box slightly to check context
+        const searchMinX = Math.max(0, minX - 10);
+        const searchMaxX = Math.min(width - 1, maxX + 10);
+        const searchMinY = Math.max(startY, minY - 20); // Check more above
+        const searchMaxY = Math.min(height - 1, maxY + 10);
+        
+        for (let sy = searchMinY; sy <= searchMaxY; sy++) {
+          for (let sx = searchMinX; sx <= searchMaxX; sx++) {
+            const ctxType = pixelMap[sy * width + sx];
+            if (ctxType === 1) softRockCount++;
+            if (ctxType === 2) {
+              hardRockCount++;
+              if (sy < minY) hardRockAboveCount++;
+            }
+          }
+        }
+
+        rawGaps.push({ 
+          area, minX, maxX, minY, maxY, sumX, sumY, points,
+          softRockCount, hardRockCount, hardRockAboveCount 
+        });
       }
     }
   }
 
-  const features: GeologicalFeature[] = [];
-  let waterZoneCount = 1;
+  const waterZones: GeologicalFeature[] = [];
+  let zoneCount = 1;
 
-  for (const comp of rawFeatures) {
-    const isWater = comp.type === 3;
-    const isSoft = comp.type === 1;
-
-    // Concave hull
+  for (const gap of rawGaps) {
     const hullPoints: number[][] = [];
-    const step = Math.max(1, Math.floor(comp.points.length / 2000));
-    for (let i = 0; i < comp.points.length; i += 2 * step) {
-      hullPoints.push([comp.points[i], comp.points[i+1]]);
+    const step = Math.max(1, Math.floor(gap.points.length / 2000));
+    for (let i = 0; i < gap.points.length; i += 2 * step) {
+      hullPoints.push([gap.points[i], gap.points[i+1]]);
     }
     const hull = concaveman(hullPoints, 2, 0.005);
     const flatHull: number[] = [];
     for (const p of hull) flatHull.push(p[0], p[1]);
 
-    // Scoring for Water Gaps: Prefer shallower, larger, continuous
-    let score = 0;
-    if (isWater) {
-      const depthWeight = 1.0 - (comp.minY / height); // shallower = better
-      const sizeWeight = comp.area / (width * height);
-      score = Math.round((comp.area * 0.05) + (sizeWeight * 500) + (depthWeight * 50));
-    }
+    // Geological Borewell Interpretation Scoring
+    // 1. Shallower depth (higher Y is deeper, so lower Y is better)
+    const depthWeight = (height - gap.minY) / height; 
+    
+    // 2. Larger connected gap
+    const sizeWeight = gap.area / (width * height);
+    
+    // 3. Less hard rock above it
+    const hardRockPenalty = gap.hardRockAboveCount * 0.5;
+    
+    // 4. Presence of soft-rock fracture (green) around it
+    const softRockBonus = gap.softRockCount * 0.2;
 
-    features.push({
-      id: isWater ? `Water Zone ${waterZoneCount++}` : (isSoft ? "Soft Rock" : "Hard Rock"),
-      type: isWater ? "Water-Bearing Gap" : (isSoft ? "Soft Rock" : "Hard Rock"),
-      area: comp.area,
-      minX: comp.minX, maxX: comp.maxX, minY: comp.minY, maxY: comp.maxY,
-      centroidX: comp.sumX / comp.area,
-      centroidY: comp.sumY / comp.area,
+    const score = Math.round(
+      (depthWeight * 2000) + 
+      (sizeWeight * 10000) + 
+      (softRockBonus) - 
+      (hardRockPenalty)
+    );
+
+    waterZones.push({
+      id: `Water Zone`, // Will be numbered after sorting
+      type: "Water-Bearing Gap",
+      area: gap.area,
+      minX: gap.minX, maxX: gap.maxX, minY: gap.minY, maxY: gap.maxY,
+      centroidX: gap.sumX / gap.area,
+      centroidY: gap.sumY / gap.area,
       score,
-      confidence: Math.min(100, Math.floor(80 + (comp.area / (width*height)) * 100)),
-      points: new Int32Array(comp.points),
+      confidence: Math.min(100, Math.floor(75 + (gap.softRockCount / (gap.area + 1)) * 10 - (gap.hardRockAboveCount / (gap.area + 1)) * 10)),
+      points: new Int32Array(gap.points),
       recommended: false,
-      colorType: isWater ? "black" : (isSoft ? "green" : "orange"),
-      polygon: flatHull
+      colorType: "black",
+      polygon: flatHull,
+      priority: 0
     });
   }
 
-  // Find the best drilling point (Water Zone with highest score)
-  const waterGaps = features.filter(f => f.type === "Water-Bearing Gap");
-  if (waterGaps.length > 0) {
-    waterGaps.sort((a, b) => b.score - a.score);
-    waterGaps[0].recommended = true;
-  }
+  // Sort by priority (score descending)
+  waterZones.sort((a, b) => b.score - a.score);
+  
+  // Assign numbering and recommendation
+  waterZones.forEach((z, idx) => {
+    z.id = `Water Zone ${idx + 1}`;
+    z.priority = idx + 1;
+    if (idx === 0) z.recommended = true;
+  });
 
-  return features;
+  return { waterZones, pixelMap };
 }

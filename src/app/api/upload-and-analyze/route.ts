@@ -29,11 +29,11 @@ export async function POST(req: NextRequest) {
     cvCtx.drawImage(canvasImage, 0, 0, width, height);
     const imageData = cvCtx.getImageData(0, 0, width, height);
     
-    const features = detectGeologicalFeatures(imageData, width, height);
-    const waterGaps = features.filter(f => f.type === "Water-Bearing Gap").sort((a,b) => b.score - a.score);
+    // Perform geological interpretation
+    const { waterZones, pixelMap } = detectGeologicalFeatures(imageData, width, height);
     
     let bestBorewellX = width / 2;
-    let recommendedZone = waterGaps.length > 0 ? waterGaps[0] : null;
+    let recommendedZone = waterZones.length > 0 ? waterZones[0] : null;
     if (recommendedZone) {
       bestBorewellX = recommendedZone.centroidX;
     }
@@ -44,9 +44,9 @@ export async function POST(req: NextRequest) {
     // --- GEMINI SUMMARIZATION ---
     let geminiJson;
     try {
-      const cvSummary = waterGaps.map(f => `${f.id}: Area=${f.area}, Score=${f.score}, DepthRangeY=${f.minY}-${f.maxY}`).join("\n");
+      const cvSummary = waterZones.map(f => `${f.id}: Area=${f.area}, Score=${f.score}, DepthRangeY=${f.minY}-${f.maxY}`).join("\n");
       const prompt = `Act as an expert PQWT geological reporter. 
-      I have ALREADY run a deterministic Computer Vision pipeline. Here are the detected water zones:
+      I have ALREADY run a deterministic Borewell Interpreter pipeline. Here are the detected isolated water zones:
       ${cvSummary}
       
       Return ONLY a JSON object matching this structure:
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
         "confidence": "string (High, Medium, Low)",
         "depthScale": [{ "yPixel": "number", "depthValue": "number" }],
         "originalProfileAnalysis": "string (Describe the visual profile generally)",
-        "processedProfileAnalysis": "string (Summarize the detected CV features provided above. Explain why the highest scoring anomaly is a good drill point.)"
+        "processedProfileAnalysis": "string (Summarize the detected Water Zones. Explain why the highest scoring anomaly is the best drill point.)"
       }`;
       
       const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -99,14 +99,15 @@ export async function POST(req: NextRequest) {
       return -1;
     };
 
-    // Calculate depths for all water features
-    const mappedFeatures = waterGaps.map((f, idx) => {
+    // Annotate depth on features
+    const mappedFeatures = waterZones.map((f, idx) => {
       const d1 = pixelToDepth(f.minY);
       const d2 = pixelToDepth(f.maxY);
       const dStr = (d1 !== -1 && d2 !== -1) ? `${d1}m - ${d2}m` : "Unavailable";
-      return { ...f, depthRange: dStr, priority: idx + 1 };
+      return { ...f, depthRange: dStr };
     });
 
+    // Helper to draw SMALL tight ellipse around gap
     const drawWaterZone = (ctx: any, f: any) => {
       const d1 = pixelToDepth(f.minY);
       const d2 = pixelToDepth(f.maxY);
@@ -178,34 +179,36 @@ export async function POST(req: NextRequest) {
     const aOrigCanvas = createCanvas(width, height);
     const aOrigCtx = aOrigCanvas.getContext('2d');
     aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    for (const f of waterGaps) drawWaterZone(aOrigCtx, f);
+    for (const f of waterZones) drawWaterZone(aOrigCtx, f);
     const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
-    // 2. AI Processed Detection Map
+    // 2. AI Processed Detection Map (Solid pixel colors based on context)
     const procCanvas = createCanvas(width, height);
     const procCtx = procCanvas.getContext('2d');
-    procCtx.fillStyle = "#ffffff";
-    procCtx.fillRect(0, 0, width, height);
-    procCtx.globalAlpha = 0.8;
-    for (const f of features) {
-      if (!f.polygon || f.polygon.length < 6) continue;
-      procCtx.beginPath();
-      procCtx.moveTo(f.polygon[0], f.polygon[1]);
-      for (let i = 2; i < f.polygon.length; i += 2) procCtx.lineTo(f.polygon[i], f.polygon[i+1]);
-      procCtx.closePath();
-      if (f.type === "Water-Bearing Gap") procCtx.fillStyle = "rgba(30, 64, 175, 1)"; // Black/Blue
-      else if (f.type === "Soft Rock") procCtx.fillStyle = "rgba(34, 197, 94, 1)"; // Green
-      else if (f.type === "Hard Rock") procCtx.fillStyle = "rgba(234, 138, 36, 1)"; // Orange
-      procCtx.fill();
+    const procImgData = procCtx.createImageData(width, height);
+    
+    // Interpret pixelMap into visual colors
+    for(let i=0; i<pixelMap.length; i++){
+      const type = pixelMap[i];
+      const pIdx = i * 4;
+      if (type === 1) { // Soft Rock
+        procImgData.data[pIdx]=34; procImgData.data[pIdx+1]=197; procImgData.data[pIdx+2]=94; procImgData.data[pIdx+3]=255;
+      } else if (type === 2) { // Hard Rock
+        procImgData.data[pIdx]=234; procImgData.data[pIdx+1]=138; procImgData.data[pIdx+2]=36; procImgData.data[pIdx+3]=255;
+      } else if (type === 3) { // Water Gap
+        procImgData.data[pIdx]=30; procImgData.data[pIdx+1]=64; procImgData.data[pIdx+2]=175; procImgData.data[pIdx+3]=255;
+      } else { // Background
+        procImgData.data[pIdx]=240; procImgData.data[pIdx+1]=240; procImgData.data[pIdx+2]=240; procImgData.data[pIdx+3]=255;
+      }
     }
-    procCtx.globalAlpha = 1.0;
+    procCtx.putImageData(procImgData, 0, 0);
     const processedImageUrl = `data:image/png;base64,${procCanvas.toBuffer("image/png").toString("base64")}`;
 
     // 3. AI Annotated Processed Map
     const aProcCanvas = createCanvas(width, height);
     const aProcCtx = aProcCanvas.getContext('2d');
     aProcCtx.drawImage(procCanvas, 0, 0, width, height);
-    for (const f of waterGaps) drawWaterZone(aProcCtx, f);
+    for (const f of waterZones) drawWaterZone(aProcCtx, f);
     drawDrillingLine(aProcCtx);
     const annotatedProcessedImageUrl = `data:image/png;base64,${aProcCanvas.toBuffer("image/png").toString("base64")}`;
 
