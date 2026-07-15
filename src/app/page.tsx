@@ -12,10 +12,11 @@ export default function Home() {
         report={{
           customerName: reportData.customerName,
           originalImage: reportData.originalImage,
-          annotatedImage: reportData.annotatedImage,
+          annotatedOriginalImage: reportData.annotatedOriginalImage,
           processedImage: reportData.processedImage,
+          annotatedProcessedImage: reportData.annotatedProcessedImage,
           features: reportData.features,
-          geminiData: JSON.stringify(reportData.geminiData) // ReportView expects stringified if it parses it, wait, ReportView expects what?
+          geminiData: JSON.stringify(reportData.geminiData)
         }} 
         parsedData={reportData.geminiData}
         onNewSurvey={() => setReportData(null)}

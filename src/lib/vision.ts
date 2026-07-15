@@ -16,8 +16,7 @@ export interface GeologicalFeature {
   points: Int32Array;
   recommended: boolean;
   colorType: string;
-  fillRatio: number; // area / bounding box area — used to decide ellipse vs contour
-  polygon: number[]; // Alternating x, y array of tight concave hull vertices
+  polygon: number[]; 
 }
 
 function rgbToHsl(r: number, g: number, b: number) {
@@ -38,127 +37,14 @@ function rgbToHsl(r: number, g: number, b: number) {
   return [h * 360, s * 100, l * 100];
 }
 
-/**
- * Morphological erosion: removes boundary pixels of a given type.
- * A pixel survives only if ALL 4 cardinal neighbours share the same type.
- * Running N passes breaks thin bridges between touching blobs.
- */
-function erodeMask(pixelType: Uint8Array, width: number, height: number, startY: number, targetType: number, passes: number): Uint8Array {
-  let current = new Uint8Array(pixelType);
-  for (let pass = 0; pass < passes; pass++) {
-    const next = new Uint8Array(current);
-    for (let y = startY + 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        const idx = y * width + x;
-        if (current[idx] !== targetType) continue;
-        // Check 4-connected neighbours
-        if (
-          current[idx - 1] !== targetType ||
-          current[idx + 1] !== targetType ||
-          current[idx - width] !== targetType ||
-          current[idx + width] !== targetType
-        ) {
-          next[idx] = 0; // erode away
-        }
-      }
-    }
-    current = next;
-  }
-  return current;
-}
-
-/**
- * BFS flood-fill to extract one connected component from a binary mask.
- */
-function extractComponent(
-  mask: Uint8Array, visited: Uint8Array,
-  startX: number, startY: number,
-  targetType: number, width: number, height: number, minScanY: number
-): { area: number; minX: number; maxX: number; minY: number; maxY: number; sumX: number; sumY: number; points: number[] } {
-  const queue: [number, number][] = [[startX, startY]];
-  visited[startY * width + startX] = 1;
-
-  let area = 0, minX = startX, maxX = startX, minY = startY, maxY = startY;
-  let sumX = 0, sumY = 0;
-  const points: number[] = [];
-  let qHead = 0;
-
-  while (qHead < queue.length) {
-    const [cx, cy] = queue[qHead++];
-    points.push(cx, cy);
-    area++;
-    sumX += cx; sumY += cy;
-    if (cx < minX) minX = cx;
-    if (cx > maxX) maxX = cx;
-    if (cy < minY) minY = cy;
-    if (cy > maxY) maxY = cy;
-
-    for (const [nx, ny] of [[cx-1,cy],[cx+1,cy],[cx,cy-1],[cx,cy+1]]) {
-      if (nx >= 0 && nx < width && ny >= minScanY && ny < height) {
-        const nIdx = ny * width + nx;
-        if (!visited[nIdx] && mask[nIdx] === targetType) {
-          visited[nIdx] = 1;
-          queue.push([nx, ny]);
-        }
-      }
-    }
-  }
-
-  return { area, minX, maxX, minY, maxY, sumX, sumY, points };
-}
-
-/**
- * Sub-split a wide component by scanning vertical columns.
- * If a column has zero pixels of this component, that's a split boundary.
- */
-function subSplitWide(
-  points: number[], width: number, minX: number, maxX: number
-): number[][] {
-  // Build column histogram
-  const colCount = new Uint32Array(width);
-  for (let i = 0; i < points.length; i += 2) {
-    colCount[points[i]]++;
-  }
-
-  // Find contiguous horizontal runs
-  const runs: [number, number][] = [];
-  let runStart = -1;
-  for (let x = minX; x <= maxX; x++) {
-    if (colCount[x] > 0) {
-      if (runStart === -1) runStart = x;
-    } else {
-      if (runStart !== -1) {
-        runs.push([runStart, x - 1]);
-        runStart = -1;
-      }
-    }
-  }
-  if (runStart !== -1) runs.push([runStart, maxX]);
-
-  if (runs.length <= 1) return [points]; // cannot split
-
-  // Assign each point to its run
-  const subGroups: number[][] = runs.map(() => []);
-  for (let i = 0; i < points.length; i += 2) {
-    const px = points[i], py = points[i + 1];
-    for (let r = 0; r < runs.length; r++) {
-      if (px >= runs[r][0] && px <= runs[r][1]) {
-        subGroups[r].push(px, py);
-        break;
-      }
-    }
-  }
-
-  return subGroups.filter(g => g.length >= 4); // at least 2 pixels
-}
-
 export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number): GeologicalFeature[] {
   const data = imageData.data;
-  const startY = Math.round(height * 0.2);
+  const startY = Math.round(height * 0.2); // Skip header/surface noise
   const totalPixels = width * height;
   
-  // --- STEP 1: Color segmentation ---
   const pixelType = new Uint8Array(totalPixels);
+  
+  // Strict color matching
   for (let y = startY; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
@@ -166,218 +52,114 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
       const [h, s, l] = rgbToHsl(r, g, b);
 
-      if (l < 25 || (b > r + 30 && b > g + 30 && l < 40) || (h >= 200 && h <= 280 && l < 35)) {
-        pixelType[idx] = 3; // Dark / Water Gap
+      // Light blue, very light blue, cyan, black anomaly
+      // e.g., low lightness (black/dark blue) or hue in blue/cyan range
+      if (
+        l < 25 || 
+        (b > r + 20 && b > g + 20 && l < 60) || 
+        (h >= 180 && h <= 280 && s > 20)
+      ) {
+        pixelType[idx] = 3; // Water Gap
       } else if (h >= 70 && h <= 170 && s > 20 && l > 20) {
-        pixelType[idx] = 1; // Green / Soft Rock
+        pixelType[idx] = 1; // Soft Rock
       } else if ((h < 60 || h > 330) && s > 30 && l > 30) {
-        pixelType[idx] = 2; // Orange / Hard Rock
+        pixelType[idx] = 2; // Hard Rock
       }
     }
   }
 
-  // --- STEP 2: Morphological erosion on dark pixels to break thin bridges ---
-  const erodedDark = erodeMask(pixelType, width, height, startY, 3, 3);
-
-  // --- STEP 3: Connected component analysis on eroded dark mask ---
-  const visitedDark = new Uint8Array(totalPixels);
-  const rawDarkComponents: { area: number; minX: number; maxX: number; minY: number; maxY: number; sumX: number; sumY: number; points: number[] }[] = [];
+  // BFS to find connected components
+  const visited = new Uint8Array(totalPixels);
+  const rawFeatures: any[] = [];
 
   for (let y = startY; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
-      if (visitedDark[idx] || erodedDark[idx] !== 3) continue;
-      const comp = extractComponent(erodedDark, visitedDark, x, y, 3, width, height, startY);
-      rawDarkComponents.push(comp);
-    }
-  }
+      if (visited[idx] || pixelType[idx] === 0) continue;
 
-  // --- STEP 4: For each eroded component, recover the ORIGINAL (pre-erosion) pixels ---
-  // Map eroded component seeds back to original pixelType to get tight original boundaries
-  const componentLabel = new Int32Array(totalPixels); // 0 = unlabeled
-  for (let ci = 0; ci < rawDarkComponents.length; ci++) {
-    const comp = rawDarkComponents[ci];
-    // BFS from every eroded pixel, expanding into original dark pixels
-    const label = ci + 1;
-    const queue: [number, number][] = [];
-    for (let i = 0; i < comp.points.length; i += 2) {
-      const px = comp.points[i], py = comp.points[i + 1];
-      const idx = py * width + px;
-      if (componentLabel[idx] === 0) {
-        componentLabel[idx] = label;
-        queue.push([px, py]);
-      }
-    }
-    let qHead = 0;
-    while (qHead < queue.length) {
-      const [cx, cy] = queue[qHead++];
-      for (const [nx, ny] of [[cx-1,cy],[cx+1,cy],[cx,cy-1],[cx,cy+1]]) {
-        if (nx >= 0 && nx < width && ny >= startY && ny < height) {
-          const nIdx = ny * width + nx;
-          if (componentLabel[nIdx] === 0 && pixelType[nIdx] === 3) {
-            componentLabel[nIdx] = label;
-            queue.push([nx, ny]);
+      const t = pixelType[idx];
+      
+      const queue: [number, number][] = [[x, y]];
+      visited[idx] = 1;
+      
+      let area = 0, minX = x, maxX = x, minY = y, maxY = y;
+      let sumX = 0, sumY = 0;
+      const points: number[] = [];
+      let qHead = 0;
+
+      while (qHead < queue.length) {
+        const [cx, cy] = queue[qHead++];
+        points.push(cx, cy);
+        area++;
+        sumX += cx; sumY += cy;
+        if (cx < minX) minX = cx;
+        if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
+
+        // 8-connected to merge nearby structures slightly better
+        for (let ny = cy - 1; ny <= cy + 1; ny++) {
+          for (let nx = cx - 1; nx <= cx + 1; nx++) {
+            if (nx >= 0 && nx < width && ny >= startY && ny < height) {
+              const nIdx = ny * width + nx;
+              if (!visited[nIdx] && pixelType[nIdx] === t) {
+                visited[nIdx] = 1;
+                queue.push([nx, ny]);
+              }
+            }
           }
         }
       }
-    }
-  }
 
-  // Gather the recovered components
-  const recoveredComps: Map<number, { points: number[]; minX: number; maxX: number; minY: number; maxY: number; sumX: number; sumY: number; area: number }> = new Map();
-  for (let y = startY; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      const lbl = componentLabel[idx];
-      if (lbl === 0) continue;
-      if (!recoveredComps.has(lbl)) {
-        recoveredComps.set(lbl, { points: [], minX: x, maxX: x, minY: y, maxY: y, sumX: 0, sumY: 0, area: 0 });
+      // Ignore thin noise
+      if (area > (width * height * 0.001)) {
+        rawFeatures.push({ type: t, area, minX, maxX, minY, maxY, sumX, sumY, points });
       }
-      const c = recoveredComps.get(lbl)!;
-      c.points.push(x, y);
-      c.area++;
-      c.sumX += x; c.sumY += y;
-      if (x < c.minX) c.minX = x;
-      if (x > c.maxX) c.maxX = x;
-      if (y < c.minY) c.minY = y;
-      if (y > c.maxY) c.maxY = y;
     }
   }
 
-  // --- STEP 5: Build features ---
   const features: GeologicalFeature[] = [];
-  let gapIdCount = 1;
-  const totalSearchArea = width * (height - startY);
-  const maxAnomalyWidthRatio = 0.55; // anomaly should NOT span > 55% of image width
+  let waterZoneCount = 1;
 
-  for (const [, comp] of recoveredComps) {
-    if (comp.area < totalSearchArea * 0.001) continue; // too small = noise
+  for (const comp of rawFeatures) {
+    const isWater = comp.type === 3;
+    const isSoft = comp.type === 1;
 
-    const bw = comp.maxX - comp.minX + 1;
-    const bh = comp.maxY - comp.minY + 1;
-    const bbArea = bw * bh;
-    const fillRatio = comp.area / bbArea;
+    // Concave hull
+    const hullPoints: number[][] = [];
+    const step = Math.max(1, Math.floor(comp.points.length / 2000));
+    for (let i = 0; i < comp.points.length; i += 2 * step) {
+      hullPoints.push([comp.points[i], comp.points[i+1]]);
+    }
+    const hull = concaveman(hullPoints, 2, 0.005);
+    const flatHull: number[] = [];
+    for (const p of hull) flatHull.push(p[0], p[1]);
 
-    // If region is extremely wide, try to sub-split it
-    let subComponents: number[][] = [comp.points];
-    if (bw > width * maxAnomalyWidthRatio) {
-      subComponents = subSplitWide(comp.points, width, comp.minX, comp.maxX);
+    // Scoring for Water Gaps: Prefer shallower, larger, continuous
+    let score = 0;
+    if (isWater) {
+      const depthWeight = 1.0 - (comp.minY / height); // shallower = better
+      const sizeWeight = comp.area / (width * height);
+      score = Math.round((comp.area * 0.05) + (sizeWeight * 500) + (depthWeight * 50));
     }
 
-    for (const subPoints of subComponents) {
-      if (subPoints.length < 20) continue; // need at least 10 pixels
-
-      // Recalculate bounds for this sub-component
-      let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
-      let sSumX = 0, sSumY = 0;
-      const sArea = subPoints.length / 2;
-      for (let i = 0; i < subPoints.length; i += 2) {
-        const px = subPoints[i], py = subPoints[i + 1];
-        sSumX += px; sSumY += py;
-        if (px < sMinX) sMinX = px;
-        if (px > sMaxX) sMaxX = px;
-        if (py < sMinY) sMinY = py;
-        if (py > sMaxY) sMaxY = py;
-      }
-      if (sArea < totalSearchArea * 0.001) continue;
-
-      const sw = sMaxX - sMinX + 1;
-      const sh = sMaxY - sMinY + 1;
-      const sBBArea = sw * sh;
-      const sFillRatio = sArea / sBBArea;
-
-      // Scoring
-      const compactness = sFillRatio;
-      const depthWeight = 1.0 + (sMinY / height);
-      const sizeWeight = sArea / totalSearchArea;
-      const score = Math.round(
-        (sArea * 0.03) +
-        (compactness * 60) +
-        (sizeWeight * 200) +
-        (depthWeight * 15)
-      );
-
-      let confidence = Math.min(100, Math.round(sFillRatio * 80) + 25);
-      if (confidence > 100) confidence = 100;
-
-      // Calculate concave hull (downsample points for performance)
-      const hullPoints: number[][] = [];
-      const step = Math.max(1, Math.floor(subPoints.length / 4000)); 
-      for (let i = 0; i < subPoints.length; i += 2 * step) {
-        hullPoints.push([subPoints[i], subPoints[i+1]]);
-      }
-      const hull = concaveman(hullPoints, 2, 0.005);
-      const flatHull: number[] = [];
-      for (const p of hull) {
-        flatHull.push(p[0], p[1]);
-      }
-
-      features.push({
-        id: `A${gapIdCount++}`,
-        type: "Water-Bearing Gap",
-        area: sArea,
-        minX: sMinX, maxX: sMaxX, minY: sMinY, maxY: sMaxY,
-        centroidX: sSumX / sArea,
-        centroidY: sSumY / sArea,
-        score,
-        confidence,
-        points: new Int32Array(subPoints),
-        recommended: false,
-        colorType: "black",
-        fillRatio: sFillRatio,
-        polygon: flatHull
-      });
-    }
+    features.push({
+      id: isWater ? `Water Zone ${waterZoneCount++}` : (isSoft ? "Soft Rock" : "Hard Rock"),
+      type: isWater ? "Water-Bearing Gap" : (isSoft ? "Soft Rock" : "Hard Rock"),
+      area: comp.area,
+      minX: comp.minX, maxX: comp.maxX, minY: comp.minY, maxY: comp.maxY,
+      centroidX: comp.sumX / comp.area,
+      centroidY: comp.sumY / comp.area,
+      score,
+      confidence: Math.min(100, Math.floor(80 + (comp.area / (width*height)) * 100)),
+      points: new Int32Array(comp.points),
+      recommended: false,
+      colorType: isWater ? "black" : (isSoft ? "green" : "orange"),
+      polygon: flatHull
+    });
   }
 
-  // --- STEP 6: Soft Rock and Hard Rock (simple BFS, no erosion needed) ---
-  const visitedRock = new Uint8Array(totalPixels);
-  let softIdCount = 1, hardIdCount = 1;
-
-  for (let y = startY; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      const t = pixelType[idx];
-      if (visitedRock[idx] || t === 0 || t === 3) continue;
-
-      const comp = extractComponent(pixelType, visitedRock, x, y, t, width, height, startY);
-      if (comp.area < totalSearchArea * 0.01) continue;
-
-      const bw = comp.maxX - comp.minX + 1;
-      const bh = comp.maxY - comp.minY + 1;
-      const fillRatio = comp.area / (bw * bh);
-
-      // Calculate concave hull
-      const hullPoints: number[][] = [];
-      const step = Math.max(1, Math.floor(comp.points.length / 4000));
-      for (let i = 0; i < comp.points.length; i += 2 * step) {
-        hullPoints.push([comp.points[i], comp.points[i+1]]);
-      }
-      const hull = concaveman(hullPoints, 2, 0.005);
-      const flatHull: number[] = [];
-      for (const p of hull) {
-        flatHull.push(p[0], p[1]);
-      }
-
-      features.push({
-        id: t === 1 ? `S${softIdCount++}` : `H${hardIdCount++}`,
-        type: t === 1 ? "Soft Rock" : "Hard Rock",
-        area: comp.area,
-        minX: comp.minX, maxX: comp.maxX, minY: comp.minY, maxY: comp.maxY,
-        centroidX: comp.sumX / comp.area,
-        centroidY: comp.sumY / comp.area,
-        score: 0,
-        confidence: Math.min(100, Math.round(fillRatio * 80) + 25),
-        points: new Int32Array(comp.points),
-        recommended: false,
-        colorType: t === 1 ? "green" : "orange",
-        fillRatio,
-        polygon: flatHull
-      });
-    }
-  }
-
-  // --- STEP 7: Recommend the highest-scoring water gap ---
+  // Find the best drilling point (Water Zone with highest score)
   const waterGaps = features.filter(f => f.type === "Water-Bearing Gap");
   if (waterGaps.length > 0) {
     waterGaps.sort((a, b) => b.score - a.score);
