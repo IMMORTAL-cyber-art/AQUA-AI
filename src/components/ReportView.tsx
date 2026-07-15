@@ -100,7 +100,6 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
         {/* 2. AI ANNOTATED ORIGINAL PROFILE */}
         <div id="section-annotated-orig" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
           <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>2. AI Annotated Original Profile</h2>
-          <p className="text-sm mb-4" style={{ color: '#64748b' }}>Original profile marked with detected Water Zones.</p>
           <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
             <img src={report.annotatedOriginalImage} alt="Annotated Original Profile" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
           </div>
@@ -108,8 +107,7 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
 
         {/* 3. AI PROCESSED DETECTION MAP */}
         <div id="section-processed" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>3. AI Processed Detection Map</h2>
-          <p className="text-sm mb-4" style={{ color: '#64748b' }}>Connected enclosed geological regions.</p>
+          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>3. Processed Map</h2>
           <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
             <img src={report.processedImage} alt="Processed Map" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
           </div>
@@ -118,16 +116,15 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
         {/* 4. AI ANNOTATED PROCESSED MAP */}
         <div id="section-annotated-proc" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
           <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>4. AI Annotated Processed Map</h2>
-          <p className="text-sm mb-4" style={{ color: '#64748b' }}>Processed map marked with Water Zones and the Best Drilling Point.</p>
           
           {/* 5. GEOLOGICAL LEGEND */}
           <div className="flex flex-wrap gap-4 mb-4 bg-slate-50 p-4 border rounded">
-            <h3 className="w-full font-bold text-sm mb-2">Geological Legend</h3>
+            <h3 className="w-full font-bold text-sm mb-2">5. Geological Legend</h3>
             <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-green-500"></div><span className="text-xs font-semibold text-slate-600">Soft Rock</span></div>
             <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-orange-500"></div><span className="text-xs font-semibold text-slate-600">Hard Rock</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-blue-800"></div><span className="text-xs font-semibold text-slate-600">Water-bearing Gap</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-dashed border-yellow-400"></div><span className="text-xs font-semibold text-slate-600">Water Zone</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-green-500"></div><span className="text-xs font-semibold text-slate-600">Recommended Drilling Line</span></div>
+            <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-blue-800"></div><span className="text-xs font-semibold text-slate-600">Water-bearing Cavity</span></div>
+            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-dashed border-yellow-400"></div><span className="text-xs font-semibold text-slate-600">Water Zone Boundary</span></div>
+            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-green-500"></div><span className="text-xs font-semibold text-slate-600">Drilling Line</span></div>
             <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-600"></div><span className="text-xs font-semibold text-slate-600">Best Drilling Point</span></div>
           </div>
 
@@ -136,13 +133,13 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
           </div>
         </div>
 
-        {/* 6. GEOLOGICAL ANALYSIS & PRIORITY DEPTHS */}
+        {/* 6. GEOLOGICAL ANALYSIS */}
         <div id="section-analysis" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>Geological Analysis</h2>
+          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>6. Geological Analysis</h2>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
             <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Final Best Drilling Point Depth</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Recommended Drilling Range</CardTitle></CardHeader>
               <CardContent><span className="text-2xl font-bold text-green-700">{parsedData.recommendedDrillingDepth || parsedData.bestBorewellPoint?.depth || "N/A"}</span></CardContent>
             </Card>
             <Card style={{ borderColor: '#e2e8f0' }}>
@@ -157,24 +154,9 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.originalProfileAnalysis || "N/A"}</p>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Processed Gap Geometry & Drill Decision</h4>
+              <h4 className="font-semibold text-slate-700 mb-1">Processed Map Analysis</h4>
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.processedProfileAnalysis || "N/A"}</p>
             </div>
-
-            {/* PRIORITY DEPTHS SECTION */}
-            {parsedData.priorityDepths && parsedData.priorityDepths.length > 0 && (
-              <div className="mt-6 border-t pt-4">
-                <h4 className="font-bold text-slate-800 mb-3 text-lg">Priority Drilling Depths</h4>
-                <div className="flex flex-col gap-3">
-                  {parsedData.priorityDepths.map((d: any, idx: number) => (
-                    <div key={idx} className="flex gap-4 p-3 bg-slate-50 rounded border" style={{ borderColor: '#e2e8f0' }}>
-                      <div className="font-bold text-slate-700 whitespace-nowrap">{d.interval}</div>
-                      <div className="text-slate-600 text-sm">{d.intersection}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
 

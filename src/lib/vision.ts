@@ -3,7 +3,7 @@ import concaveman from "concaveman";
 
 export interface GeologicalFeature {
   id: string;
-  type: "Water-Bearing Gap";
+  type: "Water Zone";
   area: number;
   minX: number;
   maxX: number;
@@ -17,9 +17,11 @@ export interface GeologicalFeature {
   colorType: string;
   polygon: number[];
   priority: number;
-  softRockIntersection: boolean;
-  hardRockAbove: boolean;
   verticalThickness: number;
+  horizontalWidth: number;
+  rockAbove: string;
+  rockBelow: string;
+  rockSurrounding: string;
 }
 
 export interface VisionResult {
@@ -31,7 +33,6 @@ function rgbToHsl(r: number, g: number, b: number) {
   r /= 255; g /= 255; b /= 255;
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   let h = 0, s = 0, l = (max + min) / 2;
-
   if (max !== min) {
     const d = max - min;
     s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
@@ -45,35 +46,23 @@ function rgbToHsl(r: number, g: number, b: number) {
   return [h * 360, s * 100, l * 100];
 }
 
-// ---------------------------------------------------------
-// Fast Box Blur to eliminate grid lines and text
-// ---------------------------------------------------------
 function boxBlur(gray: Float32Array, width: number, height: number, radius: number): Float32Array {
   const out = new Float32Array(gray.length);
   const temp = new Float32Array(gray.length);
-  
-  // Horizontal pass
   for (let y = 0; y < height; y++) {
     let sum = 0;
     const rowStart = y * width;
-    for (let x = -radius; x <= radius; x++) {
-      sum += gray[rowStart + Math.max(0, Math.min(width - 1, x))];
-    }
+    for (let x = -radius; x <= radius; x++) sum += gray[rowStart + Math.max(0, Math.min(width - 1, x))];
     temp[rowStart] = sum;
     for (let x = 1; x < width; x++) {
       sum += gray[rowStart + Math.min(width - 1, x + radius)] - gray[rowStart + Math.max(0, x - radius - 1)];
       temp[rowStart + x] = sum;
     }
   }
-
   const windowSize = (radius * 2 + 1) * (radius * 2 + 1);
-  
-  // Vertical pass
   for (let x = 0; x < width; x++) {
     let sum = 0;
-    for (let y = -radius; y <= radius; y++) {
-      sum += temp[Math.max(0, Math.min(height - 1, y)) * width + x];
-    }
+    for (let y = -radius; y <= radius; y++) sum += temp[Math.max(0, Math.min(height - 1, y)) * width + x];
     out[x] = sum / windowSize;
     for (let y = 1; y < height; y++) {
       sum += temp[Math.min(height - 1, y + radius) * width + x] - temp[Math.max(0, y - radius - 1) * width + x];
@@ -83,9 +72,6 @@ function boxBlur(gray: Float32Array, width: number, height: number, radius: numb
   return out;
 }
 
-// ---------------------------------------------------------
-// Sobel Edge Detection
-// ---------------------------------------------------------
 function sobelEdges(gray: Float32Array, width: number, height: number, threshold: number): Uint8Array {
   const edges = new Uint8Array(width * height);
   for (let y = 1; y < height - 1; y++) {
@@ -125,64 +111,60 @@ function dilate3x3(mask: Uint8Array, width: number, height: number): Uint8Array 
 
 export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number): VisionResult {
   const data = imageData.data;
-  const startY = Math.round(height * 0.15); // Skip surface noise/header
   const totalPixels = width * height;
   
-  // =========================================================================
-  // ANALYZER 2: PROCESSED MAP (Geological Color Classification)
-  // =========================================================================
-  const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=GapColor
-  const gray = new Float32Array(totalPixels);
+  // STEP 1: Crop the profile area. Remove borders, labels, margins.
+  const marginX = Math.round(width * 0.08);
+  const marginYTop = Math.round(height * 0.15);
+  const marginYBot = Math.round(height * 0.08);
   
-  for (let y = startY; y < height; y++) {
+  const startX = marginX;
+  const endX = width - marginX;
+  const startY = marginYTop;
+  const endY = height - marginYBot;
+
+  const gray = new Float32Array(totalPixels);
+  const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=Dark/Gap(Black/Blue)
+  
+  // Create color map (Used ONLY AFTER geometry detection for context)
+  for (let y = 0; y < height; y++) {
     let rowStart = y * width;
     for (let x = 0; x < width; x++) {
       const idx = rowStart + x;
       const pIdx = idx * 4;
       const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
       
-      // Grayscale for structure detection
       gray[idx] = 0.299 * r + 0.587 * g + 0.114 * b;
       
       const [h, s, l] = rgbToHsl(r, g, b);
-
       if (l < 20 || (h >= 170 && h <= 280 && s > 20)) {
-        pixelMap[idx] = 3; // Gap Color
+        pixelMap[idx] = 3; // Black / Dark Blue / Light Blue (Water gap context)
       } else if (h >= 70 && h <= 160 && s > 15 && l > 15) {
-        pixelMap[idx] = 1; // Soft Rock (Green)
+        pixelMap[idx] = 1; // Green (Soft Rock)
       } else if ((h >= 10 && h <= 65 || h > 330) && s > 20 && l > 15) {
-        pixelMap[idx] = 2; // Hard Rock (Orange/Red/Yellow)
+        pixelMap[idx] = 2; // Orange (Hard Rock)
       }
     }
   }
 
-  // =========================================================================
-  // ANALYZER 1: ORIGINAL PROFILE (Structural Cavity Detection)
-  // =========================================================================
-  // 1. Blur to remove grid lines and text
-  const blurredGray = boxBlur(gray, width, height, 4);
+  // STEP 2: Detect every geological contour (using Sobel Edge Detection on blurred grayscale)
+  // Blur heavily to eliminate grid lines and text.
+  const blurredGray = boxBlur(gray, width, height, 5);
+  let edges = sobelEdges(blurredGray, width, height, 12);
   
-  // 2. Edge Detection to find boundaries of cavities
-  let edges = sobelEdges(blurredGray, width, height, 15);
-  
-  // 3. Dilate edges so they form closed loops, creating enclosed cavities
+  // Dilate edges to create solid closed loops (contours)
   edges = dilate3x3(edges, width, height);
   edges = dilate3x3(edges, width, height);
   edges = dilate3x3(edges, width, height);
 
-  // 4. Find enclosed cavities (Connected components on NON-edge pixels)
+  // STEP 3 & 4: Extract closed geological regions / Find cavities enclosed by surrounding layers
   const visited = new Uint8Array(totalPixels);
   const rawCavities: any[] = [];
   
-  const borderMargin = Math.round(width * 0.05);
-  const minArea = width * height * 0.005; 
-  const maxArea = width * height * 0.25;
-
-  for (let y = startY; y < height; y++) {
+  for (let y = startY; y < endY; y++) {
     let rowStart = y * width;
-    for (let x = 0; x < width; x++) {
+    for (let x = startX; x < endX; x++) {
       const idx = rowStart + x;
-      // We look for regions bounded by edges
       if (visited[idx] || edges[idx] === 1) continue;
       
       const queue: [number, number][] = [[x, y]];
@@ -204,17 +186,15 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         if (cy < minY) minY = cy;
         if (cy > maxY) maxY = cy;
 
-        // Check if touches border margin
-        if (cx <= borderMargin || cx >= width - borderMargin || cy >= height - borderMargin) {
+        if (cx <= startX + 2 || cx >= endX - 2 || cy <= startY + 2 || cy >= endY - 2) {
           touchesBorder = true;
         }
 
-        // 4-connected flood fill for cavities
         const neighbors = [[cx-1, cy], [cx+1, cy], [cx, cy-1], [cx, cy+1]];
         for (let i=0; i<4; i++) {
           const nx = neighbors[i][0];
           const ny = neighbors[i][1];
-          if (nx >= 0 && nx < width && ny >= startY && ny < height) {
+          if (nx >= startX && nx < endX && ny >= startY && ny < endY) {
             const nIdx = ny * width + nx;
             if (!visited[nIdx] && edges[nIdx] === 0) {
               visited[nIdx] = 1;
@@ -224,102 +204,126 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         }
       }
 
-      const verticalThickness = maxY - minY;
-      const horizontalWidth = maxX - minX;
-
-      // Filter 1: Border touching
-      // Filter 2: Area constraints
-      // Filter 3: Ignore long horizontal geological layers (Aspect ratio check)
-      const isHorizontalLayer = horizontalWidth > verticalThickness * 4;
-
-      if (!touchesBorder && area >= minArea && area <= maxArea && !isHorizontalLayer) {
-        
-        // Context Check (Analyzer 2 colors intersecting this structural cavity)
-        let softRockCount = 0;
-        let hardRockCount = 0;
-        let gapColorCount = 0;
-        let hardRockAboveCount = 0;
-        
-        for (let i = 0; i < points.length; i += 2) {
-          const px = points[i];
-          const py = points[i+1];
-          const ctxType = pixelMap[py * width + px];
-          if (ctxType === 1) softRockCount++;
-          if (ctxType === 2) hardRockCount++;
-          if (ctxType === 3) gapColorCount++;
-        }
-        
-        // Check above cavity for hard rock
-        for (let sy = Math.max(startY, minY - 50); sy < minY; sy++) {
-          for (let sx = minX; sx <= maxX; sx++) {
-            if (pixelMap[sy * width + sx] === 2) hardRockAboveCount++;
-          }
-        }
-
-        // Must contain at least SOME gap color (black/blue) to be a water gap candidate
-        if (gapColorCount > area * 0.05) {
-           rawCavities.push({ 
-            area, minX, maxX, minY, maxY, sumX, sumY, points,
-            softRockCount, hardRockCount, hardRockAboveCount, verticalThickness
-          });
-        }
+      // STEP 10: Ignore grid lines, depth labels, tiny noise, massive background
+      if (!touchesBorder && area > 200 && area < (width * height * 0.15)) {
+        rawCavities.push({ area, minX, maxX, minY, maxY, sumX, sumY, points });
       }
     }
   }
 
-  // =========================================================================
-  // BEST DRILLING POINT DECISION
-  // =========================================================================
+  // STEP 5 & 9: Merge connected/nearby cavities into a single Water Zone
+  const mergedCavities: any[] = [];
+  const cavityMerged = new Array(rawCavities.length).fill(false);
+  const mergeThreshold = height * 0.05; // Merge if within 5% height distance
+
+  for (let i = 0; i < rawCavities.length; i++) {
+    if (cavityMerged[i]) continue;
+    let merged = { ...rawCavities[i], points: [...rawCavities[i].points] };
+    cavityMerged[i] = true;
+    
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < rawCavities.length; j++) {
+        if (!cavityMerged[j]) {
+          const target = rawCavities[j];
+          // Check if bounding boxes are close
+          const xOverlap = Math.max(0, Math.min(merged.maxX, target.maxX) - Math.max(merged.minX, target.minX));
+          const yDist = Math.max(0, Math.max(merged.minY, target.minY) - Math.min(merged.maxY, target.maxY));
+          
+          if (xOverlap > 0 && yDist < mergeThreshold) {
+            merged.points.push(...target.points);
+            merged.area += target.area;
+            merged.minX = Math.min(merged.minX, target.minX);
+            merged.maxX = Math.max(merged.maxX, target.maxX);
+            merged.minY = Math.min(merged.minY, target.minY);
+            merged.maxY = Math.max(merged.maxY, target.maxY);
+            merged.sumX += target.sumX;
+            merged.sumY += target.sumY;
+            cavityMerged[j] = true;
+            changed = true;
+          }
+        }
+      }
+    }
+    mergedCavities.push(merged);
+  }
+
+  // STEP 6, 7 & 8: Ignore color while finding cavities, classify surrounding rock AFTERwards
   const waterZones: GeologicalFeature[] = [];
 
-  for (const gap of rawCavities) {
-    const hullPoints: number[][] = [];
-    const step = Math.max(1, Math.floor(gap.points.length / 1000));
-    for (let i = 0; i < gap.points.length; i += 2 * step) {
-      hullPoints.push([gap.points[i], gap.points[i+1]]);
+  for (const cav of mergedCavities) {
+    const verticalThickness = cav.maxY - cav.minY;
+    const horizontalWidth = cav.maxX - cav.minX;
+    
+    // Ignore long thin flat layers
+    if (horizontalWidth > verticalThickness * 5) continue;
+
+    let softCount = 0, hardCount = 0, darkCount = 0;
+    for (let i = 0; i < cav.points.length; i += 2) {
+      const type = pixelMap[cav.points[i+1] * width + cav.points[i]];
+      if (type === 1) softCount++;
+      if (type === 2) hardCount++;
+      if (type === 3) darkCount++;
     }
-    const hull = concaveman(hullPoints, 2, 0.01);
+    
+    // Calculate rock above (search a block above the cavity)
+    let hardAbove = 0, softAbove = 0;
+    const searchTop = Math.max(startY, cav.minY - 40);
+    for (let y = searchTop; y < cav.minY; y++) {
+      for (let x = cav.minX; x <= cav.maxX; x++) {
+        const type = pixelMap[y * width + x];
+        if (type === 2) hardAbove++;
+        if (type === 1) softAbove++;
+      }
+    }
+
+    // Must have SOME fracture/gap color evidence to be a water zone, else it's just a rock chunk
+    if (darkCount < cav.area * 0.05) continue;
+
+    // Draw TIGHT polygon using concaveman with highly strict parameters
+    const hullPoints: number[][] = [];
+    const step = Math.max(1, Math.floor(cav.points.length / 500));
+    for (let i = 0; i < cav.points.length; i += 2 * step) {
+      hullPoints.push([cav.points[i], cav.points[i+1]]);
+    }
+    const hull = concaveman(hullPoints, 1, 10); // concavity=1, lengthThreshold=10 for ultra-tight fit
     const flatHull: number[] = [];
     for (const p of hull) flatHull.push(p[0], p[1]);
 
-    // DRILL DECISION SCORING based on pure geometry and context
-    // 1. Minimum drilling depth (shallower = better)
-    const depthScore = Math.max(0, 1 - (gap.minY / height)) * 1500; 
-    
-    // 2. Sufficient vertical thickness
-    const thicknessScore = (gap.verticalThickness / height) * 3000;
-    
-    // 3. Intersects soft rock
-    const softRockBonus = (gap.softRockCount > gap.area * 0.1) ? 800 : 0;
-    
-    // 4. Avoids excessive hard rock
-    const hardRockPenalty = (gap.hardRockAboveCount > gap.area * 0.5) ? -1500 : 0;
-
-    const score = Math.round(depthScore + thicknessScore + softRockBonus + hardRockPenalty);
+    // Scoring for Best Drilling Point
+    // Largest connected cavity, Max vertical continuity, Min hard rock above, Max soft rock, Shortest depth
+    const score = 
+      (verticalThickness * 10) + 
+      (cav.area * 0.5) + 
+      (softCount * 2) - 
+      (hardAbove * 5) + 
+      ((height - cav.minY) * 2);
 
     waterZones.push({
-      id: "", // Assigned later
-      type: "Water-Bearing Gap",
-      area: gap.area,
-      minX: gap.minX, maxX: gap.maxX, minY: gap.minY, maxY: gap.maxY,
-      centroidX: gap.sumX / gap.area,
-      centroidY: gap.sumY / gap.area,
+      id: "", 
+      type: "Water Zone",
+      area: cav.area,
+      minX: cav.minX, maxX: cav.maxX, minY: cav.minY, maxY: cav.maxY,
+      centroidX: cav.sumX / cav.area,
+      centroidY: cav.sumY / cav.area,
       score,
-      confidence: Math.min(100, Math.floor(70 + (gap.softRockCount > 0 ? 15 : 0) + (gap.verticalThickness > height*0.1 ? 15 : 0))),
+      confidence: Math.min(100, Math.floor(65 + (softCount/cav.area)*20 + (verticalThickness/height)*20)),
       recommended: false,
       colorType: "black",
       polygon: flatHull,
       priority: 0,
-      softRockIntersection: gap.softRockCount > gap.area * 0.1,
-      hardRockAbove: gap.hardRockAboveCount > gap.area * 0.5,
-      verticalThickness: gap.verticalThickness
+      verticalThickness,
+      horizontalWidth,
+      rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
+      rockBelow: "Unknown", 
+      rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
     });
   }
 
-  // Sort by score descending to assign priorities
+  // Choose only ONE Best Drilling Point
   waterZones.sort((a, b) => b.score - a.score);
   
-  // Assign numbering and ONE recommended zone
   waterZones.forEach((z, idx) => {
     z.id = `Water Zone ${idx + 1}`;
     z.priority = idx + 1;

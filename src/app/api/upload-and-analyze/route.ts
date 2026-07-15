@@ -7,7 +7,7 @@ import { detectGeologicalFeatures } from "@/lib/vision";
 const responseCache = new Map<string, any>();
 
 // =====================================================================
-// Helper: Draw water zone annotations (ellipse + label) onto a context
+// Helper: Draw tight polygons and labels
 // =====================================================================
 function drawWaterZones(
   ctx: any,
@@ -23,7 +23,7 @@ function drawWaterZones(
     const d2 = pixelToDepth(f.maxY);
     const dStr = (d1 !== -1 && d2 !== -1) ? `${d1}m – ${d2}m` : "";
 
-    // Tight dashed yellow ellipse around only the water gap
+    // Tight polygon boundary
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(f.polygon[0], f.polygon[1]);
@@ -31,25 +31,25 @@ function drawWaterZones(
       ctx.lineTo(f.polygon[i], f.polygon[i + 1]);
     }
     ctx.closePath();
-    ctx.strokeStyle = "rgba(255, 255, 0, 1)";
-    ctx.lineWidth = 4 * scale;
-    ctx.setLineDash([10 * scale, 8 * scale]);
+    ctx.strokeStyle = "rgba(255, 255, 0, 1)"; // Yellow boundary
+    ctx.lineWidth = 3 * scale;
+    ctx.setLineDash([8 * scale, 6 * scale]);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
 
-    // Label to the right of the zone
-    const labelX = Math.min(f.maxX + 12 * scale, ctx.canvas ? ctx.canvas.width - 150 * scale : f.maxX + 12 * scale);
+    // Label
+    const labelX = f.maxX + 10 * scale;
     const labelY = f.minY + (f.maxY - f.minY) / 2;
     const lines = dStr ? [f.id, dStr] : [f.id];
 
     ctx.save();
-    ctx.font = `bold ${15 * scale}px ${fontStack}`;
+    ctx.font = `bold ${14 * scale}px ${fontStack}`;
     const maxLineW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
     const pad = 6 * scale;
-    const lineH = 20 * scale;
+    const lineH = 18 * scale;
     const boxH = lines.length * lineH + pad * 2;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
     ctx.fillRect(labelX - pad, labelY - lineH, maxLineW + pad * 2, boxH);
     ctx.fillStyle = "#ffffff";
     lines.forEach((line: string, idx: number) => {
@@ -60,7 +60,7 @@ function drawWaterZones(
 }
 
 // =====================================================================
-// Helper: Draw drilling line + crosshair + label
+// Helper: Draw drilling line
 // =====================================================================
 function drawDrillingLine(
   ctx: any,
@@ -69,11 +69,12 @@ function drawDrillingLine(
   width: number,
   height: number,
   scale: number,
-  fontStack: string
+  fontStack: string,
+  pixelToDepth: (y: number) => string | number
 ) {
   if (!recommendedZone) return;
 
-  // Green vertical line
+  // Drilling Line
   ctx.save();
   ctx.beginPath();
   ctx.strokeStyle = "rgba(0, 255, 0, 0.9)";
@@ -82,9 +83,8 @@ function drawDrillingLine(
   ctx.lineTo(bestBorewellX, height * 0.97);
   ctx.stroke();
 
-  // Red crosshair at the best drilling point
-  const targetY = (recommendedZone.minY + recommendedZone.maxY) / 2;
-
+  // Target Point
+  const targetY = recommendedZone.minY;
   ctx.beginPath();
   ctx.fillStyle = "rgba(255, 0, 0, 1)";
   ctx.arc(bestBorewellX, targetY, 6 * scale, 0, 2 * Math.PI);
@@ -93,129 +93,32 @@ function drawDrillingLine(
   ctx.beginPath();
   ctx.strokeStyle = "rgba(255, 0, 0, 1)";
   ctx.lineWidth = 3 * scale;
-  ctx.arc(bestBorewellX, targetY, 18 * scale, 0, 2 * Math.PI);
+  ctx.moveTo(bestBorewellX - 25 * scale, targetY);
+  ctx.lineTo(bestBorewellX + 25 * scale, targetY);
+  ctx.moveTo(bestBorewellX, targetY - 25 * scale);
+  ctx.lineTo(bestBorewellX, targetY + 25 * scale);
   ctx.stroke();
 
-  ctx.beginPath();
-  ctx.strokeStyle = "rgba(255, 0, 0, 1)";
-  ctx.lineWidth = 3 * scale;
-  ctx.moveTo(bestBorewellX - 28 * scale, targetY);
-  ctx.lineTo(bestBorewellX + 28 * scale, targetY);
-  ctx.moveTo(bestBorewellX, targetY - 28 * scale);
-  ctx.lineTo(bestBorewellX, targetY + 28 * scale);
-  ctx.stroke();
-
-  // "BEST DRILLING POINT" label box
-  ctx.font = `bold ${18 * scale}px ${fontStack}`;
-  const labelText = "BEST DRILLING POINT";
-  const textW = ctx.measureText(labelText).width;
-  const boxW = textW + 32 * scale;
-  const boxH = 40 * scale;
-  let boxX = bestBorewellX + 34 * scale;
-  if (boxX + boxW > width - 10 * scale) boxX = bestBorewellX - boxW - 34 * scale;
+  // Label
+  const d1 = pixelToDepth(recommendedZone.minY);
+  const d2 = pixelToDepth(recommendedZone.maxY);
+  const depthStr = (d1 !== -1 && d2 !== -1) ? `${d1}m–${d2}m` : "Unknown";
+  
+  ctx.font = `bold ${16 * scale}px ${fontStack}`;
+  const lines = ["Best Drilling Point", `Recommended: ${depthStr}`];
+  const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
+  const boxW = maxW + 24 * scale;
+  const boxH = 50 * scale;
+  let boxX = bestBorewellX + 25 * scale;
+  if (boxX + boxW > width - 10 * scale) boxX = bestBorewellX - boxW - 25 * scale;
   const boxY = targetY - boxH / 2;
 
   ctx.fillStyle = "rgba(220, 38, 38, 0.95)";
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(labelText, boxX + 16 * scale, boxY + 27 * scale);
+  ctx.fillText(lines[0], boxX + 12 * scale, boxY + 20 * scale);
+  ctx.fillText(lines[1], boxX + 12 * scale, boxY + 40 * scale);
   ctx.restore();
-}
-
-// =====================================================================
-// IMAGE 2: Annotated Original Profile
-// =====================================================================
-async function createAnnotatedOriginal(
-  canvasImage: any,
-  width: number,
-  height: number,
-  waterZones: any[],
-  recommendedZone: any,
-  bestBorewellX: number,
-  pixelToDepth: (y: number) => string | number,
-  scale: number,
-  fontStack: string
-): Promise<string> {
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-
-  // Draw the pristine original image as the base
-  ctx.drawImage(canvasImage, 0, 0, width, height);
-
-  // Draw water zones ON TOP of the original image
-  drawWaterZones(ctx, waterZones, pixelToDepth, scale, fontStack);
-
-  // Draw drilling line ON TOP of the original image (Not requested in prompt, wait - "Draw: yellow dashed ellipse, Water Zone number, depth label" for Original Profile. "Processed Map... Draw: yellow dashed ellipse, Water Zone number, green drilling line, red drilling point. Nothing else." Let's remove drilling line from original if strict).
-  // Actually, the previous prompt asked for "Draw Best Drilling Point. Draw drilling line." on BOTH.
-  // The new prompt says:
-  // Original Profile: Draw: yellow dashed ellipse, Water Zone number, depth label
-  // Processed Map: Draw: yellow dashed ellipse, Water Zone number, green drilling line, red drilling point. Nothing else.
-  // Let's strictly follow the latest prompt. We skip drawDrillingLine here!
-
-  return `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
-}
-
-// =====================================================================
-// IMAGE 3: Processed Detection Map (no labels, no drilling line)
-// =====================================================================
-function createProcessedMap(
-  pixelMap: Uint8Array,
-  width: number,
-  height: number
-): { canvas: Canvas; dataUrl: string } {
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  const imgData = ctx.createImageData(width, height);
-
-  for (let i = 0; i < pixelMap.length; i++) {
-    const type = pixelMap[i];
-    const p = i * 4;
-    if (type === 1) {          // Soft Rock → Green
-      imgData.data[p] = 34;  imgData.data[p+1] = 197; imgData.data[p+2] = 94;  imgData.data[p+3] = 255;
-    } else if (type === 2) {   // Hard Rock → Orange
-      imgData.data[p] = 234; imgData.data[p+1] = 138; imgData.data[p+2] = 36;  imgData.data[p+3] = 255;
-    } else if (type === 3) {   // Water Gap → Deep Blue
-      imgData.data[p] = 30;  imgData.data[p+1] = 64;  imgData.data[p+2] = 175; imgData.data[p+3] = 255;
-    } else {                   // Background → Light grey
-      imgData.data[p] = 240; imgData.data[p+1] = 240; imgData.data[p+2] = 240; imgData.data[p+3] = 255;
-    }
-  }
-  ctx.putImageData(imgData, 0, 0);
-
-  return {
-    canvas,
-    dataUrl: `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`,
-  };
-}
-
-// =====================================================================
-// IMAGE 4: Annotated Processed Map
-// =====================================================================
-function createAnnotatedProcessed(
-  processedCanvas: Canvas,
-  width: number,
-  height: number,
-  waterZones: any[],
-  recommendedZone: any,
-  bestBorewellX: number,
-  pixelToDepth: (y: number) => string | number,
-  scale: number,
-  fontStack: string
-): string {
-  // Fresh canvas — copy the processed map into it pixel-for-pixel
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-
-  // Draw the processed map as the base
-  ctx.drawImage(processedCanvas, 0, 0, width, height);
-
-  // Draw zone annotations ON TOP of the processed map
-  drawWaterZones(ctx, waterZones, pixelToDepth, scale, fontStack);
-
-  // Draw drilling line ON TOP of the processed map
-  drawDrillingLine(ctx, recommendedZone, bestBorewellX, width, height, scale, fontStack);
-
-  return `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
 }
 
 // =====================================================================
@@ -233,15 +136,12 @@ export async function POST(req: NextRequest) {
 
     const buffer = Buffer.from(await image.arrayBuffer());
     const originalImageType = image.type || "image/png";
-
-    // IMAGE 1: raw original
     const originalImageUrl = `data:${originalImageType};base64,${buffer.toString("base64")}`;
 
     const canvasImage = await loadImage(buffer);
     const width = canvasImage.width;
     const height = canvasImage.height;
 
-    // Run CV on a scratch canvas — do NOT touch the canvasImage object itself
     const cvCanvas = createCanvas(width, height);
     const cvCtx = cvCanvas.getContext("2d");
     cvCtx.drawImage(canvasImage, 0, 0, width, height);
@@ -259,7 +159,7 @@ export async function POST(req: NextRequest) {
     let geminiJson: any;
     try {
       const cvSummary = waterZones
-        .map(f => `${f.id}: Area=${f.area}, Score=${f.score}, DepthRangeY=${f.minY}-${f.maxY}, VerticalThickness=${f.verticalThickness}, SoftRockFractures=${f.softRockIntersection}, HardRockAbove=${f.hardRockAbove}`)
+        .map(f => `${f.id}: TopDepthY=${f.minY}, BottomDepthY=${f.maxY}, Width=${f.horizontalWidth}, VerticalContinuity=${f.verticalThickness}, RockAbove=${f.rockAbove}, RockSurrounding=${f.rockSurrounding}`)
         .join("\n");
         
       const prompt = `Act as an expert PQWT geological reporter.
@@ -267,21 +167,13 @@ I have ALREADY run a deterministic Borewell Interpreter pipeline based on morpho
 Here are the detected isolated water zones:
 ${cvSummary}
 
-Based on this geometry, output Priority Drilling Depths.
-Example output structure inside the JSON string:
-"priorityDepths": [
-  { "interval": "0-100 m", "intersection": "No major water gaps." },
-  { "interval": "100-180 m", "intersection": "Intersects Water Zone 1 (High quality fracture)." }
-]
-
 Return ONLY a JSON object matching this exact structure (no markdown, no explanation):
 {
   "location": "string",
   "confidence": "string (High, Medium, Low)",
   "depthScale": [{ "yPixel": number, "depthValue": number }],
   "originalProfileAnalysis": "string (Describe what was found generally)",
-  "processedProfileAnalysis": "string (Explain the drill decision. Why was the best gap chosen based on geometry, soft/hard rock context, and thickness?)",
-  "priorityDepths": [{ "interval": "string", "intersection": "string" }]
+  "processedProfileAnalysis": "string (Explain the drill decision. Why was the best gap chosen based on geometry, soft/hard rock context, and thickness?)"
 }`;
 
       const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
@@ -300,7 +192,6 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       return NextResponse.json({ error: e.message || "Gemini analysis failed." }, { status: 500 });
     }
 
-    // Depth calibration
     let validScale = false;
     let depthScale = geminiJson.depthScale;
     if (Array.isArray(depthScale) && depthScale.length >= 2) {
@@ -331,30 +222,52 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       const d2 = pixelToDepth(f.maxY);
       return {
         ...f,
-        points: undefined, // strip heavy raw pixel arrays
+        points: undefined,
         depthRange: (d1 !== -1 && d2 !== -1) ? `${d1}m - ${d2}m` : "Unavailable",
       };
     });
 
     // IMAGE 2: Annotated Original Profile
-    const annotatedOriginalImageUrl = await createAnnotatedOriginal(
-      canvasImage, width, height, waterZones, recommendedZone,
-      bestBorewellX, pixelToDepth, scale, fontStack
-    );
+    const aOrigCanvas = createCanvas(width, height);
+    const aOrigCtx = aOrigCanvas.getContext("2d");
+    aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
+    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack);
+    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
+    const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
     // IMAGE 3: Processed Detection Map
-    const { canvas: processedCanvas, dataUrl: processedImageUrl } = createProcessedMap(pixelMap, width, height);
+    const procCanvas = createCanvas(width, height);
+    const procCtx = procCanvas.getContext("2d");
+    const procImgData = procCtx.createImageData(width, height);
+    for (let i = 0; i < pixelMap.length; i++) {
+      const type = pixelMap[i];
+      const p = i * 4;
+      if (type === 1) {          // Soft Rock → Green
+        procImgData.data[p] = 34;  procImgData.data[p+1] = 197; procImgData.data[p+2] = 94;  procImgData.data[p+3] = 255;
+      } else if (type === 2) {   // Hard Rock → Orange
+        procImgData.data[p] = 234; procImgData.data[p+1] = 138; procImgData.data[p+2] = 36;  procImgData.data[p+3] = 255;
+      } else if (type === 3) {   // Water Gap → Deep Blue
+        procImgData.data[p] = 30;  procImgData.data[p+1] = 64;  procImgData.data[p+2] = 175; procImgData.data[p+3] = 255;
+      } else {                   // Background → Light grey
+        procImgData.data[p] = 240; procImgData.data[p+1] = 240; procImgData.data[p+2] = 240; procImgData.data[p+3] = 255;
+      }
+    }
+    procCtx.putImageData(procImgData, 0, 0);
+    const processedImageUrl = `data:image/png;base64,${procCanvas.toBuffer("image/png").toString("base64")}`;
 
     // IMAGE 4: Annotated Processed Map
-    const annotatedProcessedImageUrl = createAnnotatedProcessed(
-      processedCanvas, width, height, waterZones, recommendedZone,
-      bestBorewellX, pixelToDepth, scale, fontStack
-    );
+    const aProcCanvas = createCanvas(width, height);
+    const aProcCtx = aProcCanvas.getContext("2d");
+    aProcCtx.drawImage(procCanvas, 0, 0, width, height);
+    drawWaterZones(aProcCtx, waterZones, pixelToDepth, scale, fontStack);
+    drawDrillingLine(aProcCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
+    const annotatedProcessedImageUrl = `data:image/png;base64,${aProcCanvas.toBuffer("image/png").toString("base64")}`;
 
     let bestDepthStr = "No reliable drilling point detected.";
     if (recommendedZone) {
-      const bestDepth = pixelToDepth((recommendedZone.minY + recommendedZone.maxY) / 2);
-      if (bestDepth !== -1) bestDepthStr = `${bestDepth}m`;
+      const d1 = pixelToDepth(recommendedZone.minY);
+      const d2 = pixelToDepth(recommendedZone.maxY);
+      if (d1 !== -1 && d2 !== -1) bestDepthStr = `${d1}m–${d2}m`;
     }
 
     geminiJson.bestBorewellPoint = { depth: bestDepthStr };
@@ -364,10 +277,10 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       success: true,
       reportData: {
         customerName,
-        originalImage: originalImageUrl,          // 1: raw, no markings
-        annotatedOriginalImage: annotatedOriginalImageUrl, // 2: original + annotations
-        processedImage: processedImageUrl,         // 3: processed map, no annotations
-        annotatedProcessedImage: annotatedProcessedImageUrl, // 4: processed + annotations
+        originalImage: originalImageUrl,
+        annotatedOriginalImage: annotatedOriginalImageUrl,
+        processedImage: processedImageUrl,
+        annotatedProcessedImage: annotatedProcessedImageUrl,
         features: mappedFeatures,
         geminiData: geminiJson,
       },
