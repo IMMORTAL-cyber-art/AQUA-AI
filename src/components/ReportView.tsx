@@ -24,7 +24,7 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
       const marginY = 20;
       const renderWidth = pdfWidth - marginX * 2;
       
-      const sections = ['section-original', 'section-annotated-orig', 'section-processed', 'section-annotated-proc', 'section-analysis', 'section-priority'];
+      const sections = ['section-original', 'section-annotated-orig', 'section-processed', 'section-annotated-proc', 'section-analysis'];
       let hasAddedFirstPage = false;
       
       for (const sectionId of sections) {
@@ -136,13 +136,13 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
           </div>
         </div>
 
-        {/* 6. GEOLOGICAL ANALYSIS & 8. BEST DRILLING POINT */}
+        {/* 6. GEOLOGICAL ANALYSIS & PRIORITY DEPTHS */}
         <div id="section-analysis" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>6. Geological Analysis</h2>
+          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>Geological Analysis</h2>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
             <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">8. Final Best Drilling Point Depth</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Final Best Drilling Point Depth</CardTitle></CardHeader>
               <CardContent><span className="text-2xl font-bold text-green-700">{parsedData.recommendedDrillingDepth || parsedData.bestBorewellPoint?.depth || "N/A"}</span></CardContent>
             </Card>
             <Card style={{ borderColor: '#e2e8f0' }}>
@@ -151,32 +151,29 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
             </Card>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Original Profile Water Zone Analysis</h4>
+              <h4 className="font-semibold text-slate-700 mb-1">Original Profile Analysis</h4>
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.originalProfileAnalysis || "N/A"}</p>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Processed Map Water Zone Analysis</h4>
+              <h4 className="font-semibold text-slate-700 mb-1">Processed Gap Geometry & Drill Decision</h4>
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.processedProfileAnalysis || "N/A"}</p>
             </div>
-          </div>
-        </div>
 
-        {/* 7. PRIORITY DRILLING RECOMMENDATION */}
-        <div id="section-priority" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>7. Priority Drilling Recommendation</h2>
-          <div className="flex flex-col gap-4">
-            {report.features && report.features.length > 0 ? (
-              report.features.map((f: any) => (
-                <div key={f.id} className={`p-4 border rounded ${f.priority === 1 ? 'bg-green-50 border-green-200' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className="font-bold text-lg text-slate-800">Priority {f.priority}</div>
-                  <div className="text-slate-600 font-semibold">{f.id}</div>
-                  <div className="text-slate-800 mt-1">{f.depthRange}</div>
+            {/* PRIORITY DEPTHS SECTION */}
+            {parsedData.priorityDepths && parsedData.priorityDepths.length > 0 && (
+              <div className="mt-6 border-t pt-4">
+                <h4 className="font-bold text-slate-800 mb-3 text-lg">Priority Drilling Depths</h4>
+                <div className="flex flex-col gap-3">
+                  {parsedData.priorityDepths.map((d: any, idx: number) => (
+                    <div key={idx} className="flex gap-4 p-3 bg-slate-50 rounded border" style={{ borderColor: '#e2e8f0' }}>
+                      <div className="font-bold text-slate-700 whitespace-nowrap">{d.interval}</div>
+                      <div className="text-slate-600 text-sm">{d.intersection}</div>
+                    </div>
+                  ))}
                 </div>
-              ))
-            ) : (
-              <div className="text-slate-500">No recommended drilling zones detected.</div>
+              </div>
             )}
           </div>
         </div>

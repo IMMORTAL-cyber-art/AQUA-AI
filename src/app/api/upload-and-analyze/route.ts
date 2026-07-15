@@ -145,8 +145,12 @@ async function createAnnotatedOriginal(
   // Draw water zones ON TOP of the original image
   drawWaterZones(ctx, waterZones, pixelToDepth, scale, fontStack);
 
-  // Draw drilling line ON TOP of the original image
-  drawDrillingLine(ctx, recommendedZone, bestBorewellX, width, height, scale, fontStack);
+  // Draw drilling line ON TOP of the original image (Not requested in prompt, wait - "Draw: yellow dashed ellipse, Water Zone number, depth label" for Original Profile. "Processed Map... Draw: yellow dashed ellipse, Water Zone number, green drilling line, red drilling point. Nothing else." Let's remove drilling line from original if strict).
+  // Actually, the previous prompt asked for "Draw Best Drilling Point. Draw drilling line." on BOTH.
+  // The new prompt says:
+  // Original Profile: Draw: yellow dashed ellipse, Water Zone number, depth label
+  // Processed Map: Draw: yellow dashed ellipse, Water Zone number, green drilling line, red drilling point. Nothing else.
+  // Let's strictly follow the latest prompt. We skip drawDrillingLine here!
 
   return `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
 }
@@ -255,19 +259,29 @@ export async function POST(req: NextRequest) {
     let geminiJson: any;
     try {
       const cvSummary = waterZones
-        .map(f => `${f.id}: Area=${f.area}, Score=${f.score}, DepthRangeY=${f.minY}-${f.maxY}`)
+        .map(f => `${f.id}: Area=${f.area}, Score=${f.score}, DepthRangeY=${f.minY}-${f.maxY}, VerticalThickness=${f.verticalThickness}, SoftRockFractures=${f.softRockIntersection}, HardRockAbove=${f.hardRockAbove}`)
         .join("\n");
+        
       const prompt = `Act as an expert PQWT geological reporter.
-I have ALREADY run a deterministic Borewell Interpreter pipeline. Here are the detected isolated water zones:
+I have ALREADY run a deterministic Borewell Interpreter pipeline based on morphological closing and cavity extraction. 
+Here are the detected isolated water zones:
 ${cvSummary}
 
-Return ONLY a JSON object matching this structure (no markdown, no explanation):
+Based on this geometry, output Priority Drilling Depths.
+Example output structure inside the JSON string:
+"priorityDepths": [
+  { "interval": "0-100 m", "intersection": "No major water gaps." },
+  { "interval": "100-180 m", "intersection": "Intersects Water Zone 1 (High quality fracture)." }
+]
+
+Return ONLY a JSON object matching this exact structure (no markdown, no explanation):
 {
   "location": "string",
   "confidence": "string (High, Medium, Low)",
   "depthScale": [{ "yPixel": number, "depthValue": number }],
-  "originalProfileAnalysis": "string",
-  "processedProfileAnalysis": "string"
+  "originalProfileAnalysis": "string (Describe what was found generally)",
+  "processedProfileAnalysis": "string (Explain the drill decision. Why was the best gap chosen based on geometry, soft/hard rock context, and thickness?)",
+  "priorityDepths": [{ "interval": "string", "intersection": "string" }]
 }`;
 
       const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
