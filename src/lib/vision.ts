@@ -151,21 +151,109 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   const data = imageData.data;
   const totalPixels = width * height;
   
-  // STEP 1: Crop the profile area. Remove borders, labels, margins.
-  const marginX = Math.round(width * 0.08);
-  const marginYTop = Math.round(height * 0.15);
-  const marginYBot = Math.round(height * 0.08);
+
   
-  const startX = marginX;
-  const endX = width - marginX;
-  const startY = marginYTop;
-  const endY = height - marginYBot;
+  // STEP 1: Automatic Profile Detection
+  // Calculate row and column counts of colorful pixels to dynamically find the largest contiguous profile grid.
+  const rowCounts = new Int32Array(height);
+  const colCounts = new Int32Array(width);
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowStart + x;
+      const pIdx = idx * 4;
+      const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
+      const [h, s, l] = rgbToHsl(r, g, b);
+      // Colors belonging to the geological scan scale (ignore white/grey margins/text/logos)
+      if (s > 15 && l > 10 && l < 97) {
+        rowCounts[y]++;
+        colCounts[x]++;
+      }
+    }
+  }
+
+  // Find union of all significant row segments (length >= 50px) to capture both original profile and processed map
+  const rowThreshold = width * 0.15;
+  let startY = -1;
+  let endY = -1;
+  let currentStart = -1;
+
+  for (let y = 0; y < height; y++) {
+    if (rowCounts[y] >= rowThreshold) {
+      if (currentStart === -1) currentStart = y;
+    } else {
+      if (currentStart !== -1) {
+        const len = y - currentStart;
+        if (len >= 50) {
+          if (startY === -1) startY = currentStart;
+          endY = y - 1;
+        }
+        currentStart = -1;
+      }
+    }
+  }
+  if (currentStart !== -1) {
+    const len = height - currentStart;
+    if (len >= 50) {
+      if (startY === -1) startY = currentStart;
+      endY = height - 1;
+    }
+  }
+
+  // Find longest contiguous sequence of columns containing geological pixels
+  const colThreshold = height * 0.15;
+  let bestColStart = -1, bestColEnd = -1;
+  let maxColLen = 0;
+  currentStart = -1;
+
+  for (let x = 0; x < width; x++) {
+    if (colCounts[x] >= colThreshold) {
+      if (currentStart === -1) currentStart = x;
+    } else {
+      if (currentStart !== -1) {
+        const len = x - currentStart;
+        if (len > maxColLen) {
+          maxColLen = len;
+          bestColStart = currentStart;
+          bestColEnd = x - 1;
+        }
+        currentStart = -1;
+      }
+    }
+  }
+  if (currentStart !== -1) {
+    const len = width - currentStart;
+    if (len > maxColLen) {
+      maxColLen = len;
+      bestColStart = currentStart;
+      bestColEnd = width - 1;
+    }
+  }
+
+  // Apply fallback if not found, otherwise pad inset
+  let startX = 0, endX = width - 1;
+  if (startX === -1 || endX === -1 || bestColStart === -1) {
+    startX = Math.round(width * 0.08);
+    endX = width - Math.round(width * 0.08);
+  } else {
+    startX = Math.max(0, bestColStart + 2);
+    endX = Math.min(width, bestColEnd - 2);
+  }
+
+  if (startY === -1 || endY === -1) {
+    startY = Math.round(height * 0.15);
+    endY = height - Math.round(height * 0.08);
+  } else {
+    startY = Math.max(0, startY + 2);
+    endY = Math.min(height, endY - 2);
+  }
+
+  console.log(`[Auto Crop] Detected geological profile area: X [${startX} -> ${endX}], Y [${startY} -> ${endY}] (Width: ${endX - startX}, Height: ${endY - startY})`);
 
   const gray = new Float32Array(totalPixels);
   const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=Dark/Gap(Black/Blue)
-  
-  // Create color map strictly inside the cropped geological profile region.
-  // Pixels outside the crop region remain 0 (Background) so page margins/text are not colored.
+
+  // STEP 2: Color classification strictly inside crop bounds
   for (let y = startY; y < endY; y++) {
     let rowStart = y * width;
     for (let x = startX; x < endX; x++) {
@@ -177,13 +265,12 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       
       const [h, s, l] = rgbToHsl(r, g, b);
       if (l < 20 || (h >= 170 && h <= 280 && s > 20)) {
-        pixelMap[idx] = 3; // Black / Dark Blue / Light Blue (Water gap context)
+        pixelMap[idx] = 3; // Black / Dark Blue / Light Blue (Water gap)
       } else {
-        // Any non-water pixel inside is rock. Classify by Hue to green or orange rock.
         if (h >= 70 && h <= 170) {
           pixelMap[idx] = 1; // Green (Soft Rock)
         } else {
-          pixelMap[idx] = 2; // Orange (Hard Rock)
+          pixelMap[idx] = 2; // Orange/Brown (Hard Rock)
         }
       }
     }
@@ -201,12 +288,12 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     }
   }
 
-  // Morphological Closing: dilation followed by erosion (radius=2)
-  console.log("[Morphological Closing] Performing closing on blue water mask...");
-  const dilated = dilate(blueMask, width, height, 2);
-  const closedMask = erode(dilated, width, height, 2);
+  // STEP 3: Morphological Closing with radius=1 to avoid giant merges
+  console.log("[Morphological Closing] Performing closing on blue water mask (radius=1)...");
+  const dilated = dilate(blueMask, width, height, 1);
+  const closedMask = erode(dilated, width, height, 1);
 
-  // STEP 3: Extract connected anomaly components (BFS)
+  // STEP 4: Extract connected components (BFS)
   const visited = new Uint8Array(totalPixels);
   const validCavities: any[] = [];
 
@@ -267,28 +354,36 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       const verticalThickness = maxY - minY;
       const horizontalWidth = maxX - minX;
 
-      // RULE 3: Remove tiny connected components below a minimum area threshold
+      // Filter A: Reject tiny components
       if (enclosedArea < 300) {
         console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: tiny area (${enclosedArea} < 300)`);
         continue;
       }
 
-      // RULE 1: Ignore every connected blue component touching the image border of the ENTIRE image
-      const touchesImageBorder = (minX <= 3 || maxX >= width - 4 || minY <= 3 || maxY >= height - 4);
-      if (touchesImageBorder) {
-        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: touches absolute image border (minX: ${minX}, maxX: ${maxX}, minY: ${minY}, maxY: ${maxY})`);
+      // Filter B: Reject components touching absolute image boundaries (using 5px buffer)
+      const touchesBorder = (minX <= 5 || maxX >= width - 5 || minY <= 5 || maxY >= height - 5);
+      if (touchesBorder) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: touches border (X: ${minX}-${maxX}, Y: ${minY}-${maxY})`);
         continue;
       }
 
-      // RULE 2: Ignore the continuous bottom blue layer completely
+      // Filter C: Reject continuous bottom blue boundary
       const isBottomLayer = (maxY > endY - 30 && horizontalWidth > cropWidth * 0.50);
       if (isBottomLayer) {
-        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: bottom blue layer (Width: ${horizontalWidth}, maxY: ${maxY})`);
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: bottom blue boundary`);
         continue;
       }
 
-      // RULE 4: A valid water cavity must be fully enclosed by orange and/or green rock (allowing left/right crop edge expansion)
-      let isFullyEnclosed = true;
+      // Filter D: Reject long horizontal strips
+      const isHorizontalStrip = (horizontalWidth > cropWidth * 0.35 && verticalThickness < 20);
+      if (isHorizontalStrip) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: horizontal strip`);
+        continue;
+      }
+
+      // Filter E: Rock enclosure check (must be surrounded mostly, >=75%, by soft/hard rock)
+      let rockNeighbors = 0;
+      let totalNeighbors = 0;
       for (const cIdx of componentPixels) {
         const cx = cIdx % width;
         const cy = Math.floor(cIdx / width);
@@ -296,32 +391,21 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         for (let n = 0; n < 4; n++) {
           const nx = neighbors[n][0];
           const ny = neighbors[n][1];
-          
-          // Enclosure constraint for top and bottom of crop area
-          if (ny < startY || ny >= endY) {
-            isFullyEnclosed = false;
-            break;
-          }
-          
-          // Allow extending/truncating at the left/right crop edges
-          if (nx < startX || nx >= endX) {
-            continue;
-          }
-          
-          const nIdx = ny * width + nx;
-          if (!componentPixels.has(nIdx)) {
-            const neighborColor = pixelMap[nIdx];
-            if (neighborColor !== 1 && neighborColor !== 2) {
-              isFullyEnclosed = false;
-              break;
+          if (nx >= startX && nx < endX && ny >= startY && ny < endY) {
+            const nIdx = ny * width + nx;
+            if (!componentPixels.has(nIdx)) {
+              totalNeighbors++;
+              const neighborColor = pixelMap[nIdx];
+              if (neighborColor === 1 || neighborColor === 2) {
+                rockNeighbors++;
+              }
             }
           }
         }
-        if (!isFullyEnclosed) break;
       }
-
-      if (!isFullyEnclosed) {
-        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: not fully enclosed by orange/green rock`);
+      const rockRatio = totalNeighbors > 0 ? rockNeighbors / totalNeighbors : 0;
+      if (rockRatio < 0.75) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: rock enclosure ratio too low (${(rockRatio*100).toFixed(1)}% < 75%)`);
         continue;
       }
 
@@ -336,16 +420,17 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         centroidY,
         verticalThickness,
         horizontalWidth,
+        rockRatio,
         points
       });
     }
   }
 
-  // STEP 4: Merge nearby cavities belonging to the same fracture
+  // STEP 5: Merge nearby fracture cavities (continuity merge) with 4% height threshold
   console.log(`[Debug Log] Unmerged valid cavities: ${validCavities.length}`);
   const mergedCavities: any[] = [];
   const cavityMerged = new Array(validCavities.length).fill(false);
-  const mergeThreshold = height * 0.06; // 6% height distance
+  const mergeThreshold = height * 0.04;
 
   for (let i = 0; i < validCavities.length; i++) {
     if (cavityMerged[i]) continue;
@@ -373,6 +458,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
             merged.centroidY = (merged.centroidY * (merged.enclosedArea - target.enclosedArea) + target.centroidY * target.enclosedArea) / merged.enclosedArea;
             merged.verticalThickness = merged.maxY - merged.minY;
             merged.horizontalWidth = merged.maxX - merged.minX;
+            merged.rockRatio = (merged.rockRatio + target.rockRatio) / 2;
             cavityMerged[j] = true;
             changed = true;
           }
@@ -382,49 +468,53 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     mergedCavities.push(merged);
   }
 
-  // STEP 5: Rank and evaluate all merged cavities (drilling corridors)
-  const maxPossibleArea = cropWidth * cropHeight;
+  // STEP 6: Geological Scoring
   const maxPossibleThickness = cropHeight;
   const maxPossibleDistance = Math.min(cropWidth / 2, cropHeight / 2);
 
   const scoredCorridors = mergedCavities.map(c => {
     const distanceFromBorder = Math.min(c.minX - startX, endX - c.maxX, c.minY - startY, endY - c.maxY);
 
-    const normEnclosedArea = (c.enclosedArea / maxPossibleArea) * 100;
-    const normCavitySize = (c.cavitySize / maxPossibleArea) * 100;
-    const normVerticalContinuity = (c.verticalThickness / maxPossibleThickness) * 100;
-    const normDistanceFromBorder = (distanceFromBorder / maxPossibleDistance) * 100;
+    // 1. Enclosure score
+    const enclosureScore = c.rockRatio * 100;
+    // 2. Fracture continuity
+    const continuityScore = (c.verticalThickness / maxPossibleThickness) * 100;
+    // 3. Shape Quality (favor vertical elongation over wide strips)
+    const shapeScore = Math.min(100, (c.verticalThickness / (c.horizontalWidth + 1)) * 50);
+    // 4. Distance From Border
+    const borderDistanceScore = (distanceFromBorder / maxPossibleDistance) * 100;
+    // 5. Vertical consistency (water pixel density)
+    const consistencyScore = (c.cavitySize / c.enclosedArea) * 100;
 
-    // score = 40% enclosed area, 30% cavity size, 20% vertical continuity, 10% distance from border
-    const score = 0.4 * normEnclosedArea + 0.3 * normCavitySize + 0.2 * normVerticalContinuity + 0.1 * normDistanceFromBorder;
+    // final geological score = 30% enclosure + 30% continuity + 15% shape quality + 15% consistency + 10% border distance
+    const score = 0.3 * enclosureScore + 0.3 * continuityScore + 0.15 * shapeScore + 0.15 * consistencyScore + 0.1 * borderDistanceScore;
 
     return {
       ...c,
-      distanceFromBorder,
-      normEnclosedArea,
-      normCavitySize,
-      normVerticalContinuity,
-      normDistanceFromBorder,
+      enclosureScore,
+      continuityScore,
+      shapeScore,
+      borderDistanceScore,
+      consistencyScore,
       score
     };
   });
 
   scoredCorridors.sort((a, b) => b.score - a.score);
 
-  console.log(`[Debug Log] Total valid merged cavities detected: ${scoredCorridors.length}`);
-  
+  console.log(`[Debug Log] Total valid merged corridors: ${scoredCorridors.length}`);
   scoredCorridors.forEach((c, idx) => {
-    console.log(`- Cavity #${idx + 1}: Y: ${c.minY}-${c.maxY} (X: ${c.minX}-${c.maxX}), Centroid: (${c.centroidX.toFixed(1)}, ${c.centroidY.toFixed(1)})`);
-    console.log(`  * Enclosed Area (closing): ${c.enclosedArea} (normalized: ${c.normEnclosedArea.toFixed(3)}%)`);
-    console.log(`  * Cavity Size (original blue): ${c.cavitySize} (normalized: ${c.normCavitySize.toFixed(3)}%)`);
-    console.log(`  * Vertical Continuity (thickness): ${c.verticalThickness} (normalized: ${c.normVerticalContinuity.toFixed(3)}%)`);
-    console.log(`  * Distance From Border: ${c.distanceFromBorder} (normalized: ${c.normDistanceFromBorder.toFixed(3)}%)`);
-    console.log(`  * Final Score: ${c.score.toFixed(3)}`);
+    console.log(`- Corridor #${idx + 1}: Y: ${c.minY}-${c.maxY} (X: ${c.minX}-${c.maxX}), Centroid: (${c.centroidX.toFixed(1)}, ${c.centroidY.toFixed(1)})`);
+    console.log(`  * Rock Enclosure: ${c.enclosureScore.toFixed(1)}%`);
+    console.log(`  * Continuity: ${c.continuityScore.toFixed(1)}%`);
+    console.log(`  * Shape Quality: ${c.shapeScore.toFixed(1)}%`);
+    console.log(`  * Vertical Consistency: ${c.consistencyScore.toFixed(1)}%`);
+    console.log(`  * Distance From Border: ${c.borderDistanceScore.toFixed(1)}%`);
+    console.log(`  * Final Geological Score: ${c.score.toFixed(3)}`);
   });
 
   const waterZones: GeologicalFeature[] = [];
 
-  // Requirements: Select ONLY ONE Best Drilling Point (at most 1 waterZone).
   if (scoredCorridors.length > 0) {
     const c = scoredCorridors[0];
 
@@ -439,23 +529,6 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       }
     }
 
-    // Rock surrounding search 30px boundary
-    let softSurrounding = 0;
-    let hardSurrounding = 0;
-    const margin = 30;
-    const sMinX = Math.max(startX, c.minX - margin);
-    const sMaxX = Math.min(endX - 1, c.maxX + margin);
-    const sMinY = Math.max(startY, c.minY - margin);
-    const sMaxY = Math.min(endY - 1, c.maxY + margin);
-
-    for (let y = sMinY; y <= sMaxY; y++) {
-      for (let x = sMinX; x <= sMaxX; x++) {
-        const type = pixelMap[y * width + x];
-        if (type === 1) softSurrounding++;
-        if (type === 2) hardSurrounding++;
-      }
-    }
-
     // Rock inside count
     let softCount = 0;
     let hardCount = 0;
@@ -464,8 +537,6 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       if (type === 1) softCount++;
       if (type === 2) hardCount++;
     }
-    softSurrounding = Math.max(0, softSurrounding - softCount);
-    hardSurrounding = Math.max(0, hardSurrounding - hardCount);
 
     // Concave hull points
     const hullPoints: number[][] = [];
@@ -477,6 +548,14 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     const flatHull: number[] = [];
     for (const p of hull) flatHull.push(p[0], p[1]);
 
+    // Confidence calculation using: rock enclosure, continuity, shape, consistency
+    const confidence = Math.min(100, Math.floor(
+      c.enclosureScore * 0.3 +
+      c.continuityScore * 0.35 +
+      c.shapeScore * 0.18 +
+      c.consistencyScore * 0.17
+    ));
+
     waterZones.push({
       id: "Water Zone 1",
       type: "Water Zone",
@@ -485,7 +564,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       centroidX: c.centroidX,
       centroidY: c.centroidY,
       score: c.score,
-      confidence: Math.min(100, Math.floor(65 + (softCount/c.enclosedArea)*20 + (c.verticalThickness/height)*20)),
+      confidence,
       recommended: true,
       colorType: "black",
       polygon: flatHull,
@@ -502,7 +581,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     console.log(`[Debug Log] Best Drilling Point selected: None (No valid enclosed cavities detected)`);
   } else {
     const recommendedZone = waterZones[0];
-    console.log(`[Debug Log] Best Drilling Point selected: ${recommendedZone.id} (Score: ${recommendedZone.score.toFixed(3)}, Centroid Y: ${recommendedZone.centroidY.toFixed(1)}, Depth pixel range: Y ${recommendedZone.minY}-${recommendedZone.maxY})`);
+    console.log(`[Debug Log] Best Drilling Point selected: ${recommendedZone.id} (Score: ${recommendedZone.score.toFixed(3)}, Centroid Y: ${recommendedZone.centroidY.toFixed(1)}, Depth pixel range: Y ${recommendedZone.minY}-${recommendedZone.maxY}, Confidence: ${recommendedZone.confidence}%)`);
   }
 
   return { waterZones, pixelMap };
