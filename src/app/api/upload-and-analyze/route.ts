@@ -74,17 +74,17 @@ function drawDrillingLine(
 ) {
   if (!recommendedZone) return;
 
-  // Drilling Line
+  // Drilling Line - drawn through the cavity vertical extent only
   ctx.save();
   ctx.beginPath();
   ctx.strokeStyle = "rgba(0, 255, 0, 0.9)";
   ctx.lineWidth = 4 * scale;
-  ctx.moveTo(bestBorewellX, height * 0.1);
-  ctx.lineTo(bestBorewellX, height * 0.97);
+  ctx.moveTo(bestBorewellX, recommendedZone.minY);
+  ctx.lineTo(bestBorewellX, recommendedZone.maxY);
   ctx.stroke();
 
-  // Target Point
-  const targetY = recommendedZone.minY;
+  // Target Point - placed at the centroidY (center) of the cavity
+  const targetY = recommendedZone.centroidY;
   ctx.beginPath();
   ctx.fillStyle = "rgba(255, 0, 0, 1)";
   ctx.arc(bestBorewellX, targetY, 6 * scale, 0, 2 * Math.PI);
@@ -241,13 +241,8 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       };
     });
 
-    // IMAGE 2: Annotated Original Profile
-    const aOrigCanvas = createCanvas(width, height);
-    const aOrigCtx = aOrigCanvas.getContext("2d");
-    aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack);
-    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
-    const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
+    // IMAGE 2: Annotated Original Profile (Omitted to avoid duplicate images)
+    const annotatedOriginalImageUrl = null;
 
     // IMAGE 3: Processed Detection Map
     const procCanvas = createCanvas(width, height);

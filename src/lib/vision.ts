@@ -93,16 +93,54 @@ function sobelEdges(gray: Float32Array, width: number, height: number, threshold
   return edges;
 }
 
-function dilate3x3(mask: Uint8Array, width: number, height: number): Uint8Array {
+function dilate(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
   const out = new Uint8Array(mask.length);
-  for (let y = 1; y < height - 1; y++) {
-    let rowStart = y * width;
-    for (let x = 1; x < width - 1; x++) {
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) {
       const idx = rowStart + x;
-      if (mask[idx]) {
-        out[idx] = 1; out[idx - 1] = 1; out[idx + 1] = 1;
-        out[idx - width] = 1; out[idx - width - 1] = 1; out[idx - width + 1] = 1;
-        out[idx + width] = 1; out[idx + width - 1] = 1; out[idx + width + 1] = 1;
+      if (mask[idx] === 1) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= height) continue;
+          const nRowStart = ny * width;
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= width) continue;
+            out[nRowStart + nx] = 1;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function erode(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+  const out = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * width;
+    for (let x = 0; x < width; x++) {
+      const idx = rowStart + x;
+      let allOne = true;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) {
+          allOne = false;
+          break;
+        }
+        const nRowStart = ny * width;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width || mask[nRowStart + nx] === 0) {
+            allOne = false;
+            break;
+          }
+        }
+        if (!allOne) break;
+      }
+      if (allOne) {
+        out[idx] = 1;
       }
     }
   }
@@ -126,7 +164,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   const gray = new Float32Array(totalPixels);
   const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=Dark/Gap(Black/Blue)
   
-  // Create color map (Used ONLY AFTER geometry detection for context)
+  // Create color map
   for (let y = 0; y < height; y++) {
     let rowStart = y * width;
     for (let x = 0; x < width; x++) {
@@ -139,56 +177,68 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       const [h, s, l] = rgbToHsl(r, g, b);
       if (l < 20 || (h >= 170 && h <= 280 && s > 20)) {
         pixelMap[idx] = 3; // Black / Dark Blue / Light Blue (Water gap context)
-      } else if (h >= 70 && h <= 160 && s > 15 && l > 15) {
-        pixelMap[idx] = 1; // Green (Soft Rock)
-      } else if ((h >= 10 && h <= 65 || h > 330) && s > 20 && l > 15) {
-        pixelMap[idx] = 2; // Orange (Hard Rock)
+      } else {
+        // Any non-water pixel inside is rock. Classify by Hue to green or orange rock.
+        if (h >= 70 && h <= 170) {
+          pixelMap[idx] = 1; // Green (Soft Rock)
+        } else {
+          pixelMap[idx] = 2; // Orange (Hard Rock)
+        }
       }
     }
   }
 
-  // STEP 2: Precompute anomaly map for direct cool-color anomaly segmentation (blue/cyan/green low resistivity)
-  const anomalyMap = new Uint8Array(totalPixels);
+  // Create binary mask of blue/water pixels inside the cropped region
+  const blueMask = new Uint8Array(totalPixels);
   for (let y = startY; y < endY; y++) {
     const rowStart = y * width;
     for (let x = startX; x < endX; x++) {
       const idx = rowStart + x;
-      const pIdx = idx * 4;
-      const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
-      const [h, s, l] = rgbToHsl(r, g, b);
-      // Cool colors (green, cyan, light blue, dark blue) between 75 and 270 hue
-      if ((h >= 75 && h <= 270) && (s > 12 && l > 12 && l < 88)) {
-        anomalyMap[idx] = 1;
+      if (pixelMap[idx] === 3) {
+        blueMask[idx] = 1;
       }
     }
   }
+
+  // Morphological Closing: dilation followed by erosion (radius=2)
+  console.log("[Morphological Closing] Performing closing on blue water mask...");
+  const dilated = dilate(blueMask, width, height, 2);
+  const closedMask = erode(dilated, width, height, 2);
 
   // STEP 3: Extract connected anomaly components (BFS)
   const visited = new Uint8Array(totalPixels);
-  const rawZones: any[] = [];
+  const validCavities: any[] = [];
+
+  const cropWidth = endX - startX;
+  const cropHeight = endY - startY;
 
   for (let y = startY; y < endY; y++) {
     const rowStart = y * width;
     for (let x = startX; x < endX; x++) {
       const idx = rowStart + x;
-      if (visited[idx] || anomalyMap[idx] === 0) continue;
+      if (visited[idx] || closedMask[idx] === 0) continue;
 
       // Start BFS
       const queue: [number, number][] = [[x, y]];
       visited[idx] = 1;
       let qHead = 0;
       
-      let area = 0;
       let minX = x, maxX = x, minY = y, maxY = y;
       let sumX = 0, sumY = 0;
-      let blueCount = 0;
-      let greenCount = 0;
+      let enclosedArea = 0;
+      let cavitySize = 0;
       const points: number[] = [];
+      const componentPixels = new Set<number>();
 
       while (qHead < queue.length) {
         const [cx, cy] = queue[qHead++];
+        const cIdx = cy * width + cx;
         points.push(cx, cy);
-        area++;
+        componentPixels.add(cIdx);
+        enclosedArea++;
+        if (blueMask[cIdx] === 1) {
+          cavitySize++;
+        }
         sumX += cx;
         sumY += cy;
 
@@ -197,22 +247,13 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         if (cy < minY) minY = cy;
         if (cy > maxY) maxY = cy;
 
-        const pIdx = (cy * width + cx) * 4;
-        const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
-        const [h, s, l] = rgbToHsl(r, g, b);
-        if (h >= 160 && h <= 270) {
-          blueCount++;
-        } else {
-          greenCount++;
-        }
-
         const neighbors = [[cx-1, cy], [cx+1, cy], [cx, cy-1], [cx, cy+1]];
         for (let i = 0; i < 4; i++) {
           const nx = neighbors[i][0];
           const ny = neighbors[i][1];
           if (nx >= startX && nx < endX && ny >= startY && ny < endY) {
             const nIdx = ny * width + nx;
-            if (!visited[nIdx] && anomalyMap[nIdx] === 1) {
+            if (!visited[nIdx] && closedMask[nIdx] === 1) {
               visited[nIdx] = 1;
               queue.push([nx, ny]);
             }
@@ -220,85 +261,133 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         }
       }
 
-      // Filter out tiny isolated patches
-      if (area < 250) continue;
+      const centroidX = sumX / enclosedArea;
+      const centroidY = sumY / enclosedArea;
+      const verticalThickness = maxY - minY;
+      const horizontalWidth = maxX - minX;
 
-      // Filter out surface vegetation (mostly green and near the top)
-      const isGreenDominant = blueCount / area < 0.15;
-      const isNearSurface = minY < startY + (endY - startY) * 0.22;
-      if (isGreenDominant && isNearSurface) {
-        console.log(`[Debug Log] Ignored surface vegetation patch at Y: ${minY}-${maxY}, Area: ${area}, Green: ${(greenCount/area*100).toFixed(1)}%`);
+      // RULE 3: Remove tiny connected components below a minimum area threshold
+      if (enclosedArea < 300) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: tiny area (${enclosedArea} < 300)`);
         continue;
       }
 
-      rawZones.push({
-        area,
+      // RULE 1: Ignore every connected blue component touching the image border of the ENTIRE image
+      const touchesImageBorder = (minX <= 3 || maxX >= width - 4 || minY <= 3 || maxY >= height - 4);
+      if (touchesImageBorder) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: touches absolute image border (minX: ${minX}, maxX: ${maxX}, minY: ${minY}, maxY: ${maxY})`);
+        continue;
+      }
+
+      // RULE 2: Ignore the continuous bottom blue layer completely
+      const isBottomLayer = (maxY > endY - 30 && horizontalWidth > cropWidth * 0.50);
+      if (isBottomLayer) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: bottom blue layer (Width: ${horizontalWidth}, maxY: ${maxY})`);
+        continue;
+      }
+
+      // RULE 4: A valid water cavity must be fully enclosed by orange and/or green rock (allowing left/right crop edge expansion)
+      let isFullyEnclosed = true;
+      for (const cIdx of componentPixels) {
+        const cx = cIdx % width;
+        const cy = Math.floor(cIdx / width);
+        const neighbors = [[cx-1, cy], [cx+1, cy], [cx, cy-1], [cx, cy+1]];
+        for (let n = 0; n < 4; n++) {
+          const nx = neighbors[n][0];
+          const ny = neighbors[n][1];
+          
+          // Enclosure constraint for top and bottom of crop area
+          if (ny < startY || ny >= endY) {
+            isFullyEnclosed = false;
+            break;
+          }
+          
+          // Allow extending/truncating at the left/right crop edges
+          if (nx < startX || nx >= endX) {
+            continue;
+          }
+          
+          const nIdx = ny * width + nx;
+          if (!componentPixels.has(nIdx)) {
+            const neighborColor = pixelMap[nIdx];
+            if (neighborColor !== 1 && neighborColor !== 2) {
+              isFullyEnclosed = false;
+              break;
+            }
+          }
+        }
+        if (!isFullyEnclosed) break;
+      }
+
+      if (!isFullyEnclosed) {
+        console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: not fully enclosed by orange/green rock`);
+        continue;
+      }
+
+      validCavities.push({
+        enclosedArea,
+        cavitySize,
         minX,
         maxX,
         minY,
         maxY,
-        centroidX: sumX / area,
-        centroidY: sumY / area,
-        blueCount,
-        greenCount,
+        centroidX,
+        centroidY,
+        verticalThickness,
+        horizontalWidth,
         points
       });
     }
   }
 
-  // STEP 4: Merge nearby raw anomaly zones
-  const mergedZones: any[] = [];
-  const zoneMerged = new Array(rawZones.length).fill(false);
-  const mergeThreshold = height * 0.05; // 5% height distance
+  // STEP 5: Rank and evaluate all valid cavities
+  const maxPossibleArea = cropWidth * cropHeight;
+  const maxPossibleThickness = cropHeight;
+  const maxPossibleDistance = Math.min(cropWidth / 2, cropHeight / 2);
 
-  for (let i = 0; i < rawZones.length; i++) {
-    if (zoneMerged[i]) continue;
-    let merged = { ...rawZones[i], points: [...rawZones[i].points] };
-    zoneMerged[i] = true;
+  const scoredCavities = validCavities.map(c => {
+    const distanceFromBorder = Math.min(c.minX - startX, endX - c.maxX, c.minY - startY, endY - c.maxY);
 
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (let j = 0; j < rawZones.length; j++) {
-        if (!zoneMerged[j]) {
-          const target = rawZones[j];
-          const xOverlap = Math.max(0, Math.min(merged.maxX, target.maxX) - Math.max(merged.minX, target.minX));
-          const yDist = Math.max(0, Math.max(merged.minY, target.minY) - Math.min(merged.maxY, target.maxY));
-          
-          if (xOverlap > 0 && yDist < mergeThreshold) {
-            merged.points.push(...target.points);
-            merged.area += target.area;
-            merged.minX = Math.min(merged.minX, target.minX);
-            merged.maxX = Math.max(merged.maxX, target.maxX);
-            merged.minY = Math.min(merged.minY, target.minY);
-            merged.maxY = Math.max(merged.maxY, target.maxY);
-            merged.centroidX = (merged.centroidX * (merged.area - target.area) + target.centroidX * target.area) / merged.area;
-            merged.centroidY = (merged.centroidY * (merged.area - target.area) + target.centroidY * target.area) / merged.area;
-            merged.blueCount += target.blueCount;
-            merged.greenCount += target.greenCount;
-            zoneMerged[j] = true;
-            changed = true;
-          }
-        }
-      }
-    }
-    mergedZones.push(merged);
-  }
+    const normEnclosedArea = (c.enclosedArea / maxPossibleArea) * 100;
+    const normCavitySize = (c.cavitySize / maxPossibleArea) * 100;
+    const normVerticalContinuity = (c.verticalThickness / maxPossibleThickness) * 100;
+    const normDistanceFromBorder = (distanceFromBorder / maxPossibleDistance) * 100;
 
-  // STEP 5: Rank and evaluate all merged water zones
+    // score = 40% enclosed area, 30% cavity size, 20% vertical continuity, 10% distance from border
+    const score = 0.4 * normEnclosedArea + 0.3 * normCavitySize + 0.2 * normVerticalContinuity + 0.1 * normDistanceFromBorder;
+
+    return {
+      ...c,
+      distanceFromBorder,
+      normEnclosedArea,
+      normCavitySize,
+      normVerticalContinuity,
+      normDistanceFromBorder,
+      score
+    };
+  });
+
+  scoredCavities.sort((a, b) => b.score - a.score);
+
+  console.log(`[Debug Log] Total valid enclosed water cavities detected: ${scoredCavities.length}`);
+  
+  scoredCavities.forEach((c, idx) => {
+    console.log(`- Cavity #${idx + 1}: Y: ${c.minY}-${c.maxY} (X: ${c.minX}-${c.maxX}), Centroid: (${c.centroidX.toFixed(1)}, ${c.centroidY.toFixed(1)})`);
+    console.log(`  * Enclosed Area (closing): ${c.enclosedArea} (normalized: ${c.normEnclosedArea.toFixed(3)}%)`);
+    console.log(`  * Cavity Size (original blue): ${c.cavitySize} (normalized: ${c.normCavitySize.toFixed(3)}%)`);
+    console.log(`  * Vertical Continuity (thickness): ${c.verticalThickness} (normalized: ${c.normVerticalContinuity.toFixed(3)}%)`);
+    console.log(`  * Distance From Border: ${c.distanceFromBorder} (normalized: ${c.normDistanceFromBorder.toFixed(3)}%)`);
+    console.log(`  * Final Score: ${c.score.toFixed(3)}`);
+  });
+
   const waterZones: GeologicalFeature[] = [];
 
-  console.log(`[Debug Log] Total merged water zones: ${mergedZones.length}`);
-
-  mergedZones.forEach((z, idx) => {
-    const verticalThickness = z.maxY - z.minY;
-    const horizontalWidth = z.maxX - z.minX;
-
+  scoredCavities.forEach((c, idx) => {
     // Rock above search top block
     let hardAbove = 0, softAbove = 0;
-    const searchTop = Math.max(startY, z.minY - 40);
-    for (let y = searchTop; y < z.minY; y++) {
-      for (let x = z.minX; x <= z.maxX; x++) {
+    const searchTop = Math.max(startY, c.minY - 40);
+    for (let y = searchTop; y < c.minY; y++) {
+      for (let x = c.minX; x <= c.maxX; x++) {
         const type = pixelMap[y * width + x];
         if (type === 2) hardAbove++;
         if (type === 1) softAbove++;
@@ -309,10 +398,10 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     let softSurrounding = 0;
     let hardSurrounding = 0;
     const margin = 30;
-    const sMinX = Math.max(startX, z.minX - margin);
-    const sMaxX = Math.min(endX - 1, z.maxX + margin);
-    const sMinY = Math.max(startY, z.minY - margin);
-    const sMaxY = Math.min(endY - 1, z.maxY + margin);
+    const sMinX = Math.max(startX, c.minX - margin);
+    const sMaxX = Math.min(endX - 1, c.maxX + margin);
+    const sMinY = Math.max(startY, c.minY - margin);
+    const sMaxY = Math.min(endY - 1, c.maxY + margin);
 
     for (let y = sMinY; y <= sMaxY; y++) {
       for (let x = sMinX; x <= sMaxX; x++) {
@@ -325,76 +414,50 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     // Rock inside count
     let softCount = 0;
     let hardCount = 0;
-    for (let i = 0; i < z.points.length; i += 2) {
-      const type = pixelMap[z.points[i+1] * width + z.points[i]];
+    for (let i = 0; i < c.points.length; i += 2) {
+      const type = pixelMap[c.points[i+1] * width + c.points[i]];
       if (type === 1) softCount++;
       if (type === 2) hardCount++;
     }
     softSurrounding = Math.max(0, softSurrounding - softCount);
     hardSurrounding = Math.max(0, hardSurrounding - hardCount);
 
-    // Score components: Area, Continuity (VerticalThickness), Depth (centroidY), Centrality (Distance to center)
-    const distanceToCenter = Math.abs(z.centroidX - width / 2);
-    const score = 
-      (z.area * 0.5) + 
-      (verticalThickness * 12) + 
-      (z.centroidY * 3) - 
-      (distanceToCenter * 4);
-
     // Concave hull points
     const hullPoints: number[][] = [];
-    const step = Math.max(1, Math.floor(z.points.length / 500));
-    for (let i = 0; i < z.points.length; i += 2 * step) {
-      hullPoints.push([z.points[i], z.points[i+1]]);
+    const step = Math.max(1, Math.floor(c.points.length / 500));
+    for (let i = 0; i < c.points.length; i += 2 * step) {
+      hullPoints.push([c.points[i], c.points[i+1]]);
     }
     const hull = concaveman(hullPoints, 1, 10);
     const flatHull: number[] = [];
     for (const p of hull) flatHull.push(p[0], p[1]);
 
     waterZones.push({
-      id: "", 
+      id: `Water Zone ${idx + 1}`,
       type: "Water Zone",
-      area: z.area,
-      minX: z.minX, maxX: z.maxX, minY: z.minY, maxY: z.maxY,
-      centroidX: z.centroidX,
-      centroidY: z.centroidY,
-      score,
-      confidence: Math.min(100, Math.floor(65 + (softCount/z.area)*20 + (verticalThickness/height)*20)),
-      recommended: false,
+      area: c.enclosedArea, 
+      minX: c.minX, maxX: c.maxX, minY: c.minY, maxY: c.maxY,
+      centroidX: c.centroidX,
+      centroidY: c.centroidY,
+      score: c.score,
+      confidence: Math.min(100, Math.floor(65 + (softCount/c.enclosedArea)*20 + (c.verticalThickness/height)*20)),
+      recommended: idx === 0,
       colorType: "black",
       polygon: flatHull,
-      priority: 0,
-      verticalThickness,
-      horizontalWidth,
+      priority: idx + 1,
+      verticalThickness: c.verticalThickness,
+      horizontalWidth: c.horizontalWidth,
       rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
       rockBelow: "Unknown", 
       rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
     });
   });
 
-  // Sort by score descending to rank them
-  waterZones.sort((a, b) => b.score - a.score);
-
-  waterZones.forEach((z, idx) => {
-    z.id = `Water Zone ${idx + 1}`;
-    z.priority = idx + 1;
-    if (idx === 0) {
-      z.recommended = true;
-      console.log(`[Debug Log] Best Drilling Point selected: ${z.id} (Score: ${z.score.toFixed(1)}, Centroid: Y=${z.centroidY.toFixed(1)}, X=${z.centroidX.toFixed(1)}, Depth Y: ${z.minY}-${z.maxY})`);
-    }
-  });
-
-  // Print debug log for all zones
-  console.log(`[Debug Log] Evaluation of all ranked water zones:`);
-  waterZones.forEach((z, idx) => {
-    const distanceToCenter = Math.abs(z.centroidX - width / 2);
-    console.log(`- Zone #${idx + 1} (${z.id}) at Y: ${z.minY}-${z.maxY} (Centroid Y: ${z.centroidY.toFixed(1)}, Centroid X: ${z.centroidX.toFixed(1)}):`);
-    console.log(`  * Metrics: area=${z.area}, width=${z.horizontalWidth}, thickness=${z.verticalThickness}`);
-    console.log(`  * Scoring: areaContribution=${(z.area * 0.5).toFixed(1)}, thicknessContribution=${(z.verticalThickness * 12).toFixed(1)}, depthContribution=${(z.centroidY * 3).toFixed(1)}, centralityContribution=${(-distanceToCenter * 4).toFixed(1)} -> Total Score: ${z.score.toFixed(1)}`);
-  });
-
   if (waterZones.length === 0) {
-    console.log(`[Debug Log] Best Drilling Point selected: None (No low-resistivity anomalies detected)`);
+    console.log(`[Debug Log] Best Drilling Point selected: None (No valid enclosed cavities detected)`);
+  } else {
+    const recommendedZone = waterZones[0];
+    console.log(`[Debug Log] Best Drilling Point selected: ${recommendedZone.id} (Score: ${recommendedZone.score.toFixed(3)}, Centroid Y: ${recommendedZone.centroidY.toFixed(1)}, Depth pixel range: Y ${recommendedZone.minY}-${recommendedZone.maxY})`);
   }
 
   return { waterZones, pixelMap };

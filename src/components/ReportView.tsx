@@ -24,7 +24,7 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
       const marginY = 20;
       const renderWidth = pdfWidth - marginX * 2;
       
-      const sections = ['section-original', 'section-annotated-orig', 'section-processed', 'section-annotated-proc', 'section-analysis'];
+      const sections = ['section-original', 'section-processed', 'section-annotated-proc', 'section-analysis'];
       let hasAddedFirstPage = false;
       
       for (const sectionId of sections) {
@@ -103,29 +103,21 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
           </div>
         </div>
 
-        {/* 2. AI ANNOTATED ORIGINAL PROFILE */}
-        <div id="section-annotated-orig" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>2. AI Annotated Original Profile</h2>
-          <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
-            <img src={report.annotatedOriginalImage} alt="Annotated Original Profile" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
-          </div>
-        </div>
-
-        {/* 3. AI PROCESSED DETECTION MAP */}
+        {/* 2. AI PROCESSED DETECTION MAP */}
         <div id="section-processed" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>3. Processed Map</h2>
+          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>2. Processed Map</h2>
           <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
             <img src={report.processedImage} alt="Processed Map" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
           </div>
         </div>
 
-        {/* 4. AI ANNOTATED PROCESSED MAP */}
+        {/* 3. AI ANNOTATED PROCESSED MAP */}
         <div id="section-annotated-proc" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>4. AI Annotated Processed Map</h2>
+          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>3. AI Annotated Processed Map</h2>
           
-          {/* 5. GEOLOGICAL LEGEND */}
+          {/* 4. GEOLOGICAL LEGEND */}
           <div className="flex flex-wrap gap-4 mb-4 bg-slate-50 p-4 border rounded">
-            <h3 className="w-full font-bold text-sm mb-2">5. Geological Legend</h3>
+            <h3 className="w-full font-bold text-sm mb-2">4. Geological Legend</h3>
             <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-green-500"></div><span className="text-xs font-semibold text-slate-600">Soft Rock</span></div>
             <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-orange-500"></div><span className="text-xs font-semibold text-slate-600">Hard Rock</span></div>
             <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-blue-800"></div><span className="text-xs font-semibold text-slate-600">Water-bearing Cavity</span></div>
@@ -139,9 +131,9 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
           </div>
         </div>
 
-        {/* 6. GEOLOGICAL ANALYSIS */}
+        {/* 5. GEOLOGICAL ANALYSIS */}
         <div id="section-analysis" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>6. Geological Analysis</h2>
+          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>5. Geological Analysis</h2>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
             <Card style={{ borderColor: '#e2e8f0' }}>
