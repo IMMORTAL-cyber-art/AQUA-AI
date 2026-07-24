@@ -164,10 +164,11 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   const gray = new Float32Array(totalPixels);
   const pixelMap = new Uint8Array(totalPixels); // 0=Bg, 1=Soft(Green), 2=Hard(Orange), 3=Dark/Gap(Black/Blue)
   
-  // Create color map
-  for (let y = 0; y < height; y++) {
+  // Create color map strictly inside the cropped geological profile region.
+  // Pixels outside the crop region remain 0 (Background) so page margins/text are not colored.
+  for (let y = startY; y < endY; y++) {
     let rowStart = y * width;
-    for (let x = 0; x < width; x++) {
+    for (let x = startX; x < endX; x++) {
       const idx = rowStart + x;
       const pIdx = idx * 4;
       const r = data[pIdx], g = data[pIdx + 1], b = data[pIdx + 2];
@@ -340,12 +341,53 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     }
   }
 
-  // STEP 5: Rank and evaluate all valid cavities
+  // STEP 4: Merge nearby cavities belonging to the same fracture
+  console.log(`[Debug Log] Unmerged valid cavities: ${validCavities.length}`);
+  const mergedCavities: any[] = [];
+  const cavityMerged = new Array(validCavities.length).fill(false);
+  const mergeThreshold = height * 0.06; // 6% height distance
+
+  for (let i = 0; i < validCavities.length; i++) {
+    if (cavityMerged[i]) continue;
+    let merged = { ...validCavities[i], points: [...validCavities[i].points] };
+    cavityMerged[i] = true;
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < validCavities.length; j++) {
+        if (!cavityMerged[j]) {
+          const target = validCavities[j];
+          const xOverlap = Math.max(0, Math.min(merged.maxX, target.maxX) - Math.max(merged.minX, target.minX));
+          const yDist = Math.max(0, Math.max(merged.minY, target.minY) - Math.min(merged.maxY, target.maxY));
+          
+          if (xOverlap > 0 && yDist < mergeThreshold) {
+            merged.points.push(...target.points);
+            merged.enclosedArea += target.enclosedArea;
+            merged.cavitySize += target.cavitySize;
+            merged.minX = Math.min(merged.minX, target.minX);
+            merged.maxX = Math.max(merged.maxX, target.maxX);
+            merged.minY = Math.min(merged.minY, target.minY);
+            merged.maxY = Math.max(merged.maxY, target.maxY);
+            merged.centroidX = (merged.centroidX * (merged.enclosedArea - target.enclosedArea) + target.centroidX * target.enclosedArea) / merged.enclosedArea;
+            merged.centroidY = (merged.centroidY * (merged.enclosedArea - target.enclosedArea) + target.centroidY * target.enclosedArea) / merged.enclosedArea;
+            merged.verticalThickness = merged.maxY - merged.minY;
+            merged.horizontalWidth = merged.maxX - merged.minX;
+            cavityMerged[j] = true;
+            changed = true;
+          }
+        }
+      }
+    }
+    mergedCavities.push(merged);
+  }
+
+  // STEP 5: Rank and evaluate all merged cavities (drilling corridors)
   const maxPossibleArea = cropWidth * cropHeight;
   const maxPossibleThickness = cropHeight;
   const maxPossibleDistance = Math.min(cropWidth / 2, cropHeight / 2);
 
-  const scoredCavities = validCavities.map(c => {
+  const scoredCorridors = mergedCavities.map(c => {
     const distanceFromBorder = Math.min(c.minX - startX, endX - c.maxX, c.minY - startY, endY - c.maxY);
 
     const normEnclosedArea = (c.enclosedArea / maxPossibleArea) * 100;
@@ -367,11 +409,11 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     };
   });
 
-  scoredCavities.sort((a, b) => b.score - a.score);
+  scoredCorridors.sort((a, b) => b.score - a.score);
 
-  console.log(`[Debug Log] Total valid enclosed water cavities detected: ${scoredCavities.length}`);
+  console.log(`[Debug Log] Total valid merged cavities detected: ${scoredCorridors.length}`);
   
-  scoredCavities.forEach((c, idx) => {
+  scoredCorridors.forEach((c, idx) => {
     console.log(`- Cavity #${idx + 1}: Y: ${c.minY}-${c.maxY} (X: ${c.minX}-${c.maxX}), Centroid: (${c.centroidX.toFixed(1)}, ${c.centroidY.toFixed(1)})`);
     console.log(`  * Enclosed Area (closing): ${c.enclosedArea} (normalized: ${c.normEnclosedArea.toFixed(3)}%)`);
     console.log(`  * Cavity Size (original blue): ${c.cavitySize} (normalized: ${c.normCavitySize.toFixed(3)}%)`);
@@ -382,7 +424,10 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
 
   const waterZones: GeologicalFeature[] = [];
 
-  scoredCavities.forEach((c, idx) => {
+  // Requirements: Select ONLY ONE Best Drilling Point (at most 1 waterZone).
+  if (scoredCorridors.length > 0) {
+    const c = scoredCorridors[0];
+
     // Rock above search top block
     let hardAbove = 0, softAbove = 0;
     const searchTop = Math.max(startY, c.minY - 40);
@@ -433,7 +478,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     for (const p of hull) flatHull.push(p[0], p[1]);
 
     waterZones.push({
-      id: `Water Zone ${idx + 1}`,
+      id: "Water Zone 1",
       type: "Water Zone",
       area: c.enclosedArea, 
       minX: c.minX, maxX: c.maxX, minY: c.minY, maxY: c.maxY,
@@ -441,17 +486,17 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       centroidY: c.centroidY,
       score: c.score,
       confidence: Math.min(100, Math.floor(65 + (softCount/c.enclosedArea)*20 + (c.verticalThickness/height)*20)),
-      recommended: idx === 0,
+      recommended: true,
       colorType: "black",
       polygon: flatHull,
-      priority: idx + 1,
+      priority: 1,
       verticalThickness: c.verticalThickness,
       horizontalWidth: c.horizontalWidth,
       rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
       rockBelow: "Unknown", 
       rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
     });
-  });
+  }
 
   if (waterZones.length === 0) {
     console.log(`[Debug Log] Best Drilling Point selected: None (No valid enclosed cavities detected)`);
