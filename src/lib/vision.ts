@@ -24,9 +24,19 @@ export interface GeologicalFeature {
   rockSurrounding: string;
 }
 
+export interface DepthComposition {
+  interval: string;
+  hardRockPercent: number;
+  softRockPercent: number;
+  waterPercent: number;
+}
+
 export interface VisionResult {
   waterZones: GeologicalFeature[];
   pixelMap: Uint8Array;
+  cropStartY: number;
+  cropEndY: number;
+  composition: DepthComposition[];
 }
 
 function rgbToHsl(r: number, g: number, b: number) {
@@ -584,5 +594,38 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     console.log(`[Debug Log] Best Drilling Point selected: ${recommendedZone.id} (Score: ${recommendedZone.score.toFixed(3)}, Centroid Y: ${recommendedZone.centroidY.toFixed(1)}, Depth pixel range: Y ${recommendedZone.minY}-${recommendedZone.maxY}, Confidence: ${recommendedZone.confidence}%)`);
   }
 
-  return { waterZones, pixelMap };
+  // STEP 7: Depth-wise Composition Table
+  // Assuming total depth is 150m, divide crop height into 3 segments
+  const composition: DepthComposition[] = [];
+  const intervals = [
+    { label: "0-50m", startRatio: 0, endRatio: 1/3 },
+    { label: "50-100m", startRatio: 1/3, endRatio: 2/3 },
+    { label: "100-150m", startRatio: 2/3, endRatio: 1 }
+  ];
+
+  const totalCropHeight = endY - startY;
+  for (const interval of intervals) {
+    const iStartY = startY + Math.floor(interval.startRatio * totalCropHeight);
+    const iEndY = startY + Math.floor(interval.endRatio * totalCropHeight);
+    let hard = 0, soft = 0, water = 0, validPixels = 0;
+
+    for (let y = iStartY; y < iEndY; y++) {
+      for (let x = startX; x < endX; x++) {
+        const type = pixelMap[y * width + x];
+        if (type === 2) hard++;
+        else if (type === 1) soft++;
+        else if (type === 3) water++;
+        if (type !== 0) validPixels++;
+      }
+    }
+
+    composition.push({
+      interval: interval.label,
+      hardRockPercent: validPixels > 0 ? (hard / validPixels) * 100 : 0,
+      softRockPercent: validPixels > 0 ? (soft / validPixels) * 100 : 0,
+      waterPercent: validPixels > 0 ? (water / validPixels) * 100 : 0,
+    });
+  }
+
+  return { waterZones, pixelMap, cropStartY: startY, cropEndY: endY, composition };
 }

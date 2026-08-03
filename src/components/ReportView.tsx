@@ -150,13 +150,46 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
             </Card>
           </div>
 
+          <div className="mb-6 bg-white border rounded-lg shadow-sm overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
+            <div className="bg-slate-50 border-b px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
+              <h3 className="font-bold text-slate-700">Depth-wise Geological Composition</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-slate-600 border-b" style={{ borderColor: '#e2e8f0' }}>
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Depth Interval</th>
+                    <th className="px-4 py-3 font-semibold">Hard Rock</th>
+                    <th className="px-4 py-3 font-semibold">Soft Rock / Fracture</th>
+                    <th className="px-4 py-3 font-semibold">Water Zone</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {parsedData.composition && parsedData.composition.map((comp: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-800">{comp.interval}</td>
+                      <td className="px-4 py-3 text-orange-600 font-medium">{comp.hardRockPercent.toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-green-600 font-medium">{comp.softRockPercent.toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-blue-600 font-medium">{comp.waterPercent.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                  {(!parsedData.composition || parsedData.composition.length === 0) && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-3 text-center text-slate-500">Composition data unavailable</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div className="space-y-6">
             <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Original Profile Analysis</h4>
+              <h4 className="font-semibold text-slate-700 mb-1">Global Profile Analysis</h4>
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.originalProfileAnalysis || "N/A"}</p>
             </div>
             <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Processed Map Analysis</h4>
+              <h4 className="font-semibold text-slate-700 mb-1">Drilling Point Justification</h4>
               <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.processedProfileAnalysis || "N/A"}</p>
             </div>
           </div>

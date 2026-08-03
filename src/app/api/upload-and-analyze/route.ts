@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createCanvas, loadImage, Canvas } from "@napi-rs/canvas";
-import { generateWithFailover, repairAndParseJSON } from "@/lib/gemini";
 import { detectGeologicalFeatures } from "@/lib/vision";
-
-const responseCache = new Map<string, any>();
 
 // =====================================================================
 // Helper: Draw tight polygons and labels
@@ -147,7 +144,7 @@ export async function POST(req: NextRequest) {
     cvCtx.drawImage(canvasImage, 0, 0, width, height);
     const imageData = cvCtx.getImageData(0, 0, width, height);
 
-    const { waterZones, pixelMap } = detectGeologicalFeatures(imageData, width, height);
+    const { waterZones, pixelMap, cropStartY, cropEndY, composition } = detectGeologicalFeatures(imageData, width, height);
 
     const recommendedZone = waterZones.length > 0 ? waterZones[0] : null;
     const bestBorewellX = recommendedZone ? recommendedZone.centroidX : width / 2;
@@ -155,66 +152,14 @@ export async function POST(req: NextRequest) {
     const scale = width / 1200;
     const fontStack = "Inter, Roboto, Arial, Helvetica, 'Segoe UI', sans-serif";
 
-    // --- GEMINI SUMMARIZATION ---
-    let geminiJson: any;
-    try {
-      const cvSummary = waterZones
-        .map(f => `${f.id}: TopDepthY=${f.minY}, BottomDepthY=${f.maxY}, Width=${f.horizontalWidth}, VerticalContinuity=${f.verticalThickness}, RockAbove=${f.rockAbove}, RockSurrounding=${f.rockSurrounding}`)
-        .join("\n");
-        
-      const prompt = `Act as an expert PQWT geological reporter.
-I have ALREADY run a deterministic Borewell Interpreter pipeline based on morphological closing and cavity extraction. 
-Here are the detected isolated water zones:
-${cvSummary}
-
-Return ONLY a JSON object matching this exact structure (no markdown, no explanation):
-{
-  "location": "string",
-  "confidence": "string (High, Medium, Low)",
-  "depthScale": [{ "yPixel": number, "depthValue": number }],
-  "originalProfileAnalysis": "string (Describe what was found generally)",
-  "processedProfileAnalysis": "string (Explain the drill decision. Why was the best gap chosen based on geometry, soft/hard rock context, and thickness?)"
-}`;
-
-      const imageHash = crypto.createHash("sha256").update(buffer).digest("hex");
-      if (responseCache.has(imageHash)) {
-        geminiJson = JSON.parse(JSON.stringify(responseCache.get(imageHash)));
-      } else {
-        const responseText = await generateWithFailover(prompt, {
-          data: buffer.toString("base64"),
-          mimeType: image.type,
-        });
-        geminiJson = repairAndParseJSON(responseText);
-        responseCache.set(imageHash, JSON.parse(JSON.stringify(geminiJson)));
-      }
-    } catch (e: any) {
-      console.error("Gemini API Error:", e.message);
-      return NextResponse.json({ error: e.message || "Gemini analysis failed." }, { status: 500 });
-    }
-
-    let validScale = false;
-    let depthScale = geminiJson.depthScale;
-    if (Array.isArray(depthScale) && depthScale.length >= 2) {
-      depthScale = depthScale
-        .map((d: any) => ({ yPixel: Number(d.yPixel), depthValue: Math.abs(Number(d.depthValue)) }))
-        .filter((d: any) => !isNaN(d.yPixel) && !isNaN(d.depthValue))
-        .sort((a: any, b: any) => a.yPixel - b.yPixel);
-      if (depthScale.length >= 2) validScale = true;
-    }
-
-    if (!validScale) {
-      const marginYTop = Math.round(height * 0.15);
-      const marginYBot = Math.round(height * 0.08);
-      const startY = marginYTop;
-      const endY = height - marginYBot;
-      
-      console.log(`[Scale Calibration Fallback] Depth scale missing/invalid. Calibrating Y: ${startY} -> ${endY} to 0m -> 150m.`);
-      depthScale = [
-        { yPixel: startY, depthValue: 0 },
-        { yPixel: endY, depthValue: 150 }
-      ];
-      validScale = true;
-    }
+    // --- DETERMINISTIC DEPTH SCALE CALIBRATION ---
+    // We assume the total depth is 150m.
+    console.log(`[Scale Calibration] Setting Y: ${cropStartY} -> ${cropEndY} to 0m -> 150m.`);
+    const depthScale = [
+      { yPixel: cropStartY, depthValue: 0 },
+      { yPixel: cropEndY, depthValue: 150 }
+    ];
+    const validScale = true;
 
     const pixelToDepth = (y: number): string | number => {
       if (!validScale) return -1;
@@ -230,6 +175,23 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       }
       return -1;
     };
+
+    // --- DETERMINISTIC ANALYSIS TEXT ---
+    let originalProfileAnalysis = "No geological features were identified in the scanned area.";
+    let processedProfileAnalysis = "Unable to determine a suitable drilling point.";
+    if (recommendedZone) {
+      originalProfileAnalysis = `Detected ${waterZones.length} valid water-bearing fracture zones. The features were extracted using deterministic pixel morphology with a 150m assumed depth scale.`;
+      processedProfileAnalysis = `Selected Water Zone 1 (score: ${recommendedZone.score.toFixed(1)}). The cavity is predominantly surrounded by ${recommendedZone.rockSurrounding} and spans a vertical thickness of ${recommendedZone.verticalThickness} pixels with a confidence of ${recommendedZone.confidence}%.`;
+    }
+
+    const geminiJson = {
+      location: "Local Assessment",
+      confidence: recommendedZone ? (recommendedZone.confidence >= 70 ? "High" : (recommendedZone.confidence >= 40 ? "Medium" : "Low")) : "None",
+      depthScale,
+      originalProfileAnalysis,
+      processedProfileAnalysis,
+      composition
+    } as any;
 
     const mappedFeatures = waterZones.map(f => {
       const d1 = pixelToDepth(f.minY);
