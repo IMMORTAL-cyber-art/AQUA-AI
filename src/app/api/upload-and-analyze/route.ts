@@ -31,7 +31,7 @@ function drawWaterZones(
       ctx.lineTo(f.polygon[i], f.polygon[i + 1]);
     }
     ctx.closePath();
-    ctx.strokeStyle = "rgba(255, 255, 0, 1)"; // Yellow boundary
+    ctx.strokeStyle = "rgba(0, 255, 0, 1)"; // Green boundary
     ctx.lineWidth = 3 * scale;
     ctx.setLineDash([8 * scale, 6 * scale]);
     ctx.stroke();
@@ -76,51 +76,49 @@ function drawDrillingLine(
 ) {
   if (!recommendedZone) return;
 
-  // Drilling Line - drawn through the cavity vertical extent only
+  // Find surface Y (ground level = 0m)
+  let surfaceY = 0;
+  for (let y = 0; y < height; y++) {
+    if (pixelToDepth(y) === 0) {
+      surfaceY = y;
+      break;
+    }
+  }
+
+  // 1. Draw one solid green vertical line from ground surface to recommended depth
   ctx.save();
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(0, 255, 0, 0.9)";
-  ctx.lineWidth = 4 * scale;
-  ctx.moveTo(bestBorewellX, recommendedZone.minY);
+  ctx.strokeStyle = "rgba(0, 255, 0, 1)";
+  ctx.lineWidth = 6 * scale; // Thicker than survey grid lines
+  ctx.moveTo(bestBorewellX, surfaceY);
   ctx.lineTo(bestBorewellX, recommendedZone.maxY);
   ctx.stroke();
 
-  // Target Point - placed at the centroidY (center) of the cavity
-  const targetY = recommendedZone.centroidY;
-  ctx.beginPath();
-  ctx.fillStyle = "rgba(255, 0, 0, 1)";
-  ctx.arc(bestBorewellX, targetY, 6 * scale, 0, 2 * Math.PI);
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.strokeStyle = "rgba(255, 0, 0, 1)";
-  ctx.lineWidth = 3 * scale;
-  ctx.moveTo(bestBorewellX - 25 * scale, targetY);
-  ctx.lineTo(bestBorewellX + 25 * scale, targetY);
-  ctx.moveTo(bestBorewellX, targetY - 25 * scale);
-  ctx.lineTo(bestBorewellX, targetY + 25 * scale);
-  ctx.stroke();
-
-  // Label
+  // 2. Add Label
   const d1 = pixelToDepth(recommendedZone.minY);
   const d2 = pixelToDepth(recommendedZone.maxY);
   const depthStr = (d1 !== -1 && d2 !== -1) ? `${d1}m–${d2}m` : "Unknown";
   const sLine = pixelToSurveyLine(recommendedZone.centroidX);
   
   ctx.font = `bold ${16 * scale}px ${fontStack}`;
-  const lines = ["Best Drilling Point", sLine, `Recommended: ${depthStr}`];
+  const lines = ["BEST DRILLING LINE", sLine, `Depth ${depthStr}`];
   const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
   const boxW = maxW + 24 * scale;
-  const boxH = 50 * scale;
-  let boxX = bestBorewellX + 25 * scale;
-  if (boxX + boxW > width - 10 * scale) boxX = bestBorewellX - boxW - 25 * scale;
-  const boxY = targetY - boxH / 2;
+  const boxH = 70 * scale;
+  
+  // Position label near the top
+  let boxX = bestBorewellX + 15 * scale;
+  if (boxX + boxW > width - 10 * scale) boxX = bestBorewellX - boxW - 15 * scale;
+  let boxY = surfaceY + 20 * scale;
+  if (boxY < 10) boxY = 10;
 
-  ctx.fillStyle = "rgba(220, 38, 38, 0.95)";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.85)"; // Dark background for the label
   ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.fillStyle = "#00ff00"; // Green text for title
+  ctx.fillText(lines[0], boxX + 12 * scale, boxY + 22 * scale);
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(lines[0], boxX + 12 * scale, boxY + 20 * scale);
-  ctx.fillText(lines[1], boxX + 12 * scale, boxY + 40 * scale);
+  ctx.fillText(lines[1], boxX + 12 * scale, boxY + 44 * scale);
+  ctx.fillText(lines[2], boxX + 12 * scale, boxY + 66 * scale);
   ctx.restore();
 }
 
