@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
-import { createCanvas, loadImage, Canvas } from "@napi-rs/canvas";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { detectGeologicalFeatures } from "@/lib/vision";
+import { createWorker } from "tesseract.js";
+
+// Force Node.js runtime because Tesseract.js uses native modules and filesystem access
 
 // =====================================================================
 // Helper: Draw tight polygons and labels
@@ -11,7 +13,8 @@ function drawWaterZones(
   zones: any[],
   pixelToDepth: (y: number) => string | number,
   scale: number,
-  fontStack: string
+  fontStack: string,
+  pixelToSurveyLine: (x: number) => string
 ) {
   for (const f of zones) {
     if (!f.polygon || f.polygon.length < 6) continue;
@@ -38,7 +41,8 @@ function drawWaterZones(
     // Label
     const labelX = f.maxX + 10 * scale;
     const labelY = f.minY + (f.maxY - f.minY) / 2;
-    const lines = dStr ? [f.id, dStr] : [f.id];
+    const sLine = pixelToSurveyLine(f.centroidX);
+    const lines = dStr ? [f.id, sLine, dStr] : [f.id, sLine];
 
     ctx.save();
     ctx.font = `bold ${14 * scale}px ${fontStack}`;
@@ -67,7 +71,8 @@ function drawDrillingLine(
   height: number,
   scale: number,
   fontStack: string,
-  pixelToDepth: (y: number) => string | number
+  pixelToDepth: (y: number) => string | number,
+  pixelToSurveyLine: (x: number) => string
 ) {
   if (!recommendedZone) return;
 
@@ -100,9 +105,10 @@ function drawDrillingLine(
   const d1 = pixelToDepth(recommendedZone.minY);
   const d2 = pixelToDepth(recommendedZone.maxY);
   const depthStr = (d1 !== -1 && d2 !== -1) ? `${d1}m–${d2}m` : "Unknown";
+  const sLine = pixelToSurveyLine(recommendedZone.centroidX);
   
   ctx.font = `bold ${16 * scale}px ${fontStack}`;
-  const lines = ["Best Drilling Point", `Recommended: ${depthStr}`];
+  const lines = ["Best Drilling Point", sLine, `Recommended: ${depthStr}`];
   const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
   const boxW = maxW + 24 * scale;
   const boxH = 50 * scale;
@@ -176,6 +182,60 @@ export async function POST(req: NextRequest) {
       return -1;
     };
 
+    // --- OCR SURVEY LINE CALIBRATION ---
+    console.log("[OCR] Initializing Tesseract for X-axis survey line detection...");
+    const worker = await createWorker('eng');
+    
+    // Crop the top margin for Survey Lines
+    // We will now pass the full image buffer to ensure we find the numbers anywhere
+    console.log("[OCR] Running recognize on full image...");
+    const { data: { words } } = await worker.recognize(buffer);
+    await worker.terminate();
+
+    // Group numeric words by their horizontal row (Y-axis proximity)
+    const numericWords = words ? words.filter(w => /^\d+$/.test(w.text)) : [];
+    const rows: { [y: string]: any[] } = {};
+    numericWords.forEach(w => {
+      const centerY = (w.bbox.y0 + w.bbox.y1) / 2;
+      // Round to nearest 20 pixels to group them in the same row
+      const bucket = Math.round(centerY / 20) * 20;
+      if (!rows[bucket]) rows[bucket] = [];
+      rows[bucket].push(w);
+    });
+
+    let bestRow: any[] = [];
+    for (const key in rows) {
+      if (rows[key].length > bestRow.length) {
+        bestRow = rows[key];
+      }
+    }
+
+    const surveyLines = bestRow.map(w => ({
+      xPixel: (w.bbox.x0 + w.bbox.x1) / 2,
+      lineValue: parseInt(w.text, 10)
+    })).sort((a, b) => a.xPixel - b.xPixel);
+
+    console.log(`[OCR] Detected ${surveyLines.length} survey lines:`, surveyLines.map(s => `Line ${s.lineValue} at X=${s.xPixel.toFixed(0)}`).join(', '));
+
+    const pixelToSurveyLine = (x: number): string => {
+      if (surveyLines.length === 0) return "Unavailable";
+      if (surveyLines.length === 1) return `Line ${surveyLines[0].lineValue}`;
+      
+      if (x <= surveyLines[0].xPixel) return `Line ${surveyLines[0].lineValue}`;
+      if (x >= surveyLines[surveyLines.length - 1].xPixel) return `Line ${surveyLines[surveyLines.length - 1].lineValue}`;
+      
+      for (let i = 0; i < surveyLines.length - 1; i++) {
+        const p1 = surveyLines[i];
+        const p2 = surveyLines[i + 1];
+        if (x >= p1.xPixel && x <= p2.xPixel) {
+          const ratio = (x - p1.xPixel) / (p2.xPixel - p1.xPixel);
+          const interpolated = p1.lineValue + ratio * (p2.lineValue - p1.lineValue);
+          return `Line ${interpolated.toFixed(1)}`;
+        }
+      }
+      return "Unavailable";
+    };
+
     // --- DETERMINISTIC ANALYSIS TEXT ---
     let originalProfileAnalysis = "No geological features were identified in the scanned area.";
     let processedProfileAnalysis = "Unable to determine a suitable drilling point.";
@@ -199,6 +259,7 @@ export async function POST(req: NextRequest) {
       return {
         ...f,
         points: undefined,
+        surveyLine: pixelToSurveyLine(f.centroidX),
         depthRange: (d1 !== -1 && d2 !== -1) ? `${d1}m - ${d2}m` : "Unavailable",
       };
     });
@@ -207,8 +268,8 @@ export async function POST(req: NextRequest) {
     const aOrigCanvas = createCanvas(width, height);
     const aOrigCtx = aOrigCanvas.getContext("2d");
     aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack);
-    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
+    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack, pixelToSurveyLine);
+    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth, pixelToSurveyLine);
     const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
     // IMAGE 3 & 4: Processed Maps (Omitted from UI as requested)

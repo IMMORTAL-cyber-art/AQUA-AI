@@ -595,12 +595,14 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   }
 
   // STEP 7: Depth-wise Composition Table
-  // Assuming total depth is 150m, divide crop height into 3 segments
+  // Divide crop height into 3 segments dynamically based on maxDepth
   const composition: DepthComposition[] = [];
+  const third = Math.round(maxDepth / 3);
+  const twoThirds = Math.round((maxDepth * 2) / 3);
   const intervals = [
-    { label: "0-50m", startRatio: 0, endRatio: 1/3 },
-    { label: "50-100m", startRatio: 1/3, endRatio: 2/3 },
-    { label: "100-150m", startRatio: 2/3, endRatio: 1 }
+    { label: `0-${third}m`, startRatio: 0, endRatio: 1/3 },
+    { label: `${third}-${twoThirds}m`, startRatio: 1/3, endRatio: 2/3 },
+    { label: `${twoThirds}-${maxDepth}m`, startRatio: 2/3, endRatio: 1 }
   ];
 
   const totalCropHeight = endY - startY;

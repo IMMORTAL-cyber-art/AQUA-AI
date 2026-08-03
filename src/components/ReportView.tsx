@@ -152,6 +152,43 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
 
           <div className="mb-6 bg-white border rounded-lg shadow-sm overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
             <div className="bg-slate-50 border-b px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
+              <h3 className="font-bold text-slate-700">Detected Candidate Aquifer Zones</h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50 text-slate-600 border-b" style={{ borderColor: '#e2e8f0' }}>
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Zone</th>
+                    <th className="px-4 py-3 font-semibold">Survey Line</th>
+                    <th className="px-4 py-3 font-semibold">Depth Range</th>
+                    <th className="px-4 py-3 font-semibold">Thickness</th>
+                    <th className="px-4 py-3 font-semibold">Width</th>
+                    <th className="px-4 py-3 font-semibold">Score</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {report.features && report.features.map((f: any, idx: number) => (
+                    <tr key={idx} className={f.recommended ? "bg-green-50" : "hover:bg-slate-50"}>
+                      <td className="px-4 py-3 font-bold text-slate-800">{f.id} {f.recommended && "⭐"}</td>
+                      <td className="px-4 py-3 text-slate-600 font-medium">{f.surveyLine || "Unavailable"}</td>
+                      <td className="px-4 py-3 text-slate-600 font-medium">{f.depthRange}</td>
+                      <td className="px-4 py-3 text-slate-600 font-medium">{f.verticalThickness} px</td>
+                      <td className="px-4 py-3 text-slate-600 font-medium">{f.horizontalWidth} px</td>
+                      <td className="px-4 py-3 text-slate-600 font-medium">{f.score.toFixed(1)}</td>
+                    </tr>
+                  ))}
+                  {(!report.features || report.features.length === 0) && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-3 text-center text-slate-500">No candidate zones detected</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="mb-6 bg-white border rounded-lg shadow-sm overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
+            <div className="bg-slate-50 border-b px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
               <h3 className="font-bold text-slate-700">Depth-wise Geological Composition</h3>
             </div>
             <div className="overflow-x-auto">
