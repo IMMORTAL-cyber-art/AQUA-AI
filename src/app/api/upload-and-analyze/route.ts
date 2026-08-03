@@ -19,43 +19,17 @@ function drawWaterZones(
   for (const f of zones) {
     if (!f.polygon || f.polygon.length < 6) continue;
 
-    const d1 = pixelToDepth(f.minY);
-    const d2 = pixelToDepth(f.maxY);
-    const dStr = (d1 !== -1 && d2 !== -1) ? `${d1}m – ${d2}m` : "";
+    const radiusX = (f.maxX - f.minX) / 2;
+    const radiusY = (f.maxY - f.minY) / 2;
+    const centerX = f.minX + radiusX;
+    const centerY = f.minY + radiusY;
 
-    // Tight polygon boundary
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(f.polygon[0], f.polygon[1]);
-    for (let i = 2; i < f.polygon.length; i += 2) {
-      ctx.lineTo(f.polygon[i], f.polygon[i + 1]);
-    }
-    ctx.closePath();
-    ctx.strokeStyle = "rgba(0, 255, 0, 1)"; // Green boundary
+    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+    ctx.strokeStyle = "rgba(0, 255, 0, 1)"; // Green oval
     ctx.lineWidth = 3 * scale;
-    ctx.setLineDash([8 * scale, 6 * scale]);
     ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    // Label
-    const labelX = f.maxX + 10 * scale;
-    const labelY = f.minY + (f.maxY - f.minY) / 2;
-    const sLine = pixelToSurveyLine(f.centroidX);
-    const lines = dStr ? [f.id, sLine, dStr] : [f.id, sLine];
-
-    ctx.save();
-    ctx.font = `bold ${14 * scale}px ${fontStack}`;
-    const maxLineW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
-    const pad = 6 * scale;
-    const lineH = 18 * scale;
-    const boxH = lines.length * lineH + pad * 2;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
-    ctx.fillRect(labelX - pad, labelY - lineH, maxLineW + pad * 2, boxH);
-    ctx.fillStyle = "#ffffff";
-    lines.forEach((line: string, idx: number) => {
-      ctx.fillText(line, labelX, labelY + idx * lineH + 3 * scale);
-    });
     ctx.restore();
   }
 }
@@ -100,25 +74,27 @@ function drawDrillingLine(
   const depthStr = (d1 !== -1 && d2 !== -1) ? `${d1}m–${d2}m` : "Unknown";
   const sLine = pixelToSurveyLine(recommendedZone.centroidX);
   
-  ctx.font = `bold ${16 * scale}px ${fontStack}`;
+  ctx.font = `bold ${18 * scale}px ${fontStack}`;
   const lines = ["BEST DRILLING LINE", sLine, `Depth ${depthStr}`];
   const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
   const boxW = maxW + 24 * scale;
-  const boxH = 70 * scale;
+  const boxH = 75 * scale;
   
-  // Position label near the top
-  let boxX = bestBorewellX + 15 * scale;
-  if (boxX + boxW > width - 10 * scale) boxX = bestBorewellX - boxW - 15 * scale;
-  let boxY = surfaceY + 20 * scale;
-  if (boxY < 10) boxY = 10;
+  // Position label directly above the map, aligned horizontally with the green line
+  let boxX = bestBorewellX - (boxW / 2);
+  if (boxX < 0) boxX = 0;
+  if (boxX + boxW > width) boxX = width - boxW;
+  
+  let boxY = surfaceY - boxH - 10 * scale;
+  if (boxY < 0) boxY = 10 * scale; // Fallback if there is no room at the top
 
-  ctx.fillStyle = "rgba(0, 0, 0, 0.85)"; // Dark background for the label
+  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
   ctx.fillRect(boxX, boxY, boxW, boxH);
-  ctx.fillStyle = "#00ff00"; // Green text for title
-  ctx.fillText(lines[0], boxX + 12 * scale, boxY + 22 * scale);
+  ctx.fillStyle = "#00ff00";
+  ctx.fillText(lines[0], boxX + (boxW - ctx.measureText(lines[0]).width) / 2, boxY + 24 * scale);
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(lines[1], boxX + 12 * scale, boxY + 44 * scale);
-  ctx.fillText(lines[2], boxX + 12 * scale, boxY + 66 * scale);
+  ctx.fillText(lines[1], boxX + (boxW - ctx.measureText(lines[1]).width) / 2, boxY + 46 * scale);
+  ctx.fillText(lines[2], boxX + (boxW - ctx.measureText(lines[2]).width) / 2, boxY + 68 * scale);
   ctx.restore();
 }
 
