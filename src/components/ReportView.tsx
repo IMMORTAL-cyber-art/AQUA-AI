@@ -24,39 +24,24 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
       const marginY = 20;
       const renderWidth = pdfWidth - marginX * 2;
       
-      const sections = ['section-original', 'section-annotated-original', 'section-analysis'];
-      let hasAddedFirstPage = false;
-      
-      for (const sectionId of sections) {
-        const sectionNode = document.getElementById(sectionId);
-        if (!sectionNode) continue;
-        
-        const images = sectionNode.querySelectorAll('img');
-        await Promise.all(Array.from(images).map(img => {
-          if (img.complete) return Promise.resolve();
-          return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
-        }));
-        await new Promise(resolve => setTimeout(resolve, 400));
-                
-        const dataUrl = await toJpeg(sectionNode, {
-          cacheBust: true, pixelRatio: 2, quality: 1, backgroundColor: '#ffffff'
-        });
-        
-        let targetWidth = renderWidth;
-        let targetHeight = (sectionNode.offsetHeight * targetWidth) / sectionNode.offsetWidth;
-        const maxH = pageHeight - marginY * 2;
-        if (targetHeight > maxH) {
-          const sf = maxH / targetHeight;
-          targetHeight = maxH;
-          targetWidth = targetWidth * sf;
-        }
-        const offsetX = marginX + (renderWidth - targetWidth) / 2;
-        
-        if (hasAddedFirstPage) pdf.addPage();
-        else hasAddedFirstPage = true;
-        
-        pdf.addImage(dataUrl, "JPEG", offsetX, marginY, targetWidth, targetHeight);
+      const img = new Image();
+      img.src = report.annotatedOriginalImage;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+
+      let targetWidth = renderWidth;
+      let targetHeight = (img.height * targetWidth) / img.width;
+      const maxH = pageHeight - marginY * 2;
+      if (targetHeight > maxH) {
+        const sf = maxH / targetHeight;
+        targetHeight = maxH;
+        targetWidth = targetWidth * sf;
       }
+      const offsetX = marginX + (renderWidth - targetWidth) / 2;
+      
+      pdf.addImage(report.annotatedOriginalImage, "PNG", offsetX, marginY, targetWidth, targetHeight);
       
       pdf.save(`AquaScan_Report_${report.customerName}.pdf`);
     } catch (error) {
@@ -91,144 +76,10 @@ export function ReportView({ report, parsedData, onNewSurvey }: { report: any; p
 
       <div ref={reportRef} className="max-w-5xl mx-auto flex flex-col gap-8">
         
-        {/* 1. ORIGINAL PROFILE */}
-        <div id="section-original" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>1. Original Profile</h2>
-          <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm mb-4" style={{ color: '#64748b' }}>
-            <span><strong>Customer:</strong> {report.customerName}</span>
-            <span><strong>Date:</strong> {surveyDate}</span>
-          </div>
+        {/* FINAL PROFESSIONAL REPORT IMAGE */}
+        <div id="section-final-report" className="bg-white border rounded-xl shadow-sm p-2 sm:p-4" style={{ borderColor: '#e2e8f0' }}>
           <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
-            <img src={report.originalImage} alt="Original PQWT Profile" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
-          </div>
-        </div>
-
-        {/* 2. AI ANNOTATED ORIGINAL PROFILE */}
-        <div id="section-annotated-original" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-1" style={{ color: '#1e293b' }}>2. AI Annotated Profile</h2>
-          
-          {/* 3. GEOLOGICAL LEGEND */}
-          <div className="flex flex-wrap gap-4 mb-4 bg-slate-50 p-4 border rounded">
-            <h3 className="w-full font-bold text-sm mb-2">3. Geological Legend</h3>
-            <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-green-500"></div><span className="text-xs font-semibold text-slate-600">Soft Rock</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-orange-500"></div><span className="text-xs font-semibold text-slate-600">Hard Rock</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-5 rounded bg-blue-800"></div><span className="text-xs font-semibold text-slate-600">Water-bearing Cavity</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-dashed border-yellow-400"></div><span className="text-xs font-semibold text-slate-600">Water Zone Boundary</span></div>
-            <div className="flex items-center gap-2"><div className="w-5 h-3 border-t-2 border-green-500"></div><span className="text-xs font-semibold text-slate-600">Drilling Line</span></div>
-            <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-600"></div><span className="text-xs font-semibold text-slate-600">Best Drilling Point</span></div>
-          </div>
-
-          <div className="relative w-full border rounded overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
-            <img src={report.annotatedOriginalImage} alt="Annotated Original Profile" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
-          </div>
-        </div>
-
-        {/* 4. GEOLOGICAL ANALYSIS */}
-        <div id="section-analysis" className="bg-white border rounded-xl shadow-sm p-6" style={{ borderColor: '#e2e8f0' }}>
-          <h2 className="text-2xl font-bold mb-4" style={{ color: '#1e293b' }}>4. Geological Analysis</h2>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-            <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Best Drilling Point</CardTitle></CardHeader>
-              <CardContent><span className="text-lg font-bold text-slate-800">{bestDrillingPointVal}</span></CardContent>
-            </Card>
-            <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Recommended Drilling Range</CardTitle></CardHeader>
-              <CardContent><span className="text-lg font-bold text-green-700">{recommendedRangeVal}</span></CardContent>
-            </Card>
-            <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Start Depth</CardTitle></CardHeader>
-              <CardContent><span className="text-lg font-bold text-blue-700">{startDepthVal}</span></CardContent>
-            </Card>
-            <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">End Depth</CardTitle></CardHeader>
-              <CardContent><span className="text-lg font-bold text-blue-700">{endDepthVal}</span></CardContent>
-            </Card>
-            <Card style={{ borderColor: '#e2e8f0' }}>
-              <CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">Confidence</CardTitle></CardHeader>
-              <CardContent><span className="text-lg font-bold text-purple-700">{parsedData.confidence || "N/A"}</span></CardContent>
-            </Card>
-          </div>
-
-          <div className="mb-6 bg-white border rounded-lg shadow-sm overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
-            <div className="bg-slate-50 border-b px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
-              <h3 className="font-bold text-slate-700">Detected Candidate Aquifer Zones</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-50 text-slate-600 border-b" style={{ borderColor: '#e2e8f0' }}>
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Zone</th>
-                    <th className="px-4 py-3 font-semibold">Survey Line</th>
-                    <th className="px-4 py-3 font-semibold">Depth Range</th>
-                    <th className="px-4 py-3 font-semibold">Thickness</th>
-                    <th className="px-4 py-3 font-semibold">Width</th>
-                    <th className="px-4 py-3 font-semibold">Score</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {report.features && report.features.map((f: any, idx: number) => (
-                    <tr key={idx} className={f.recommended ? "bg-green-50" : "hover:bg-slate-50"}>
-                      <td className="px-4 py-3 font-bold text-slate-800">{f.id} {f.recommended && "⭐"}</td>
-                      <td className="px-4 py-3 text-slate-600 font-medium">{f.surveyLine || "Unavailable"}</td>
-                      <td className="px-4 py-3 text-slate-600 font-medium">{f.depthRange}</td>
-                      <td className="px-4 py-3 text-slate-600 font-medium">{f.verticalThickness} px</td>
-                      <td className="px-4 py-3 text-slate-600 font-medium">{f.horizontalWidth} px</td>
-                      <td className="px-4 py-3 text-slate-600 font-medium">{f.score.toFixed(1)}</td>
-                    </tr>
-                  ))}
-                  {(!report.features || report.features.length === 0) && (
-                    <tr>
-                      <td colSpan={6} className="px-4 py-3 text-center text-slate-500">No candidate zones detected</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="mb-6 bg-white border rounded-lg shadow-sm overflow-hidden" style={{ borderColor: '#e2e8f0' }}>
-            <div className="bg-slate-50 border-b px-4 py-3" style={{ borderColor: '#e2e8f0' }}>
-              <h3 className="font-bold text-slate-700">Depth-wise Geological Composition</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-50 text-slate-600 border-b" style={{ borderColor: '#e2e8f0' }}>
-                  <tr>
-                    <th className="px-4 py-3 font-semibold">Depth Interval</th>
-                    <th className="px-4 py-3 font-semibold">Hard Rock</th>
-                    <th className="px-4 py-3 font-semibold">Soft Rock / Fracture</th>
-                    <th className="px-4 py-3 font-semibold">Water Zone</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {parsedData.composition && parsedData.composition.map((comp: any, idx: number) => (
-                    <tr key={idx} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium text-slate-800">{comp.interval}</td>
-                      <td className="px-4 py-3 text-orange-600 font-medium">{comp.hardRockPercent.toFixed(1)}%</td>
-                      <td className="px-4 py-3 text-green-600 font-medium">{comp.softRockPercent.toFixed(1)}%</td>
-                      <td className="px-4 py-3 text-blue-600 font-medium">{comp.waterPercent.toFixed(1)}%</td>
-                    </tr>
-                  ))}
-                  {(!parsedData.composition || parsedData.composition.length === 0) && (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-3 text-center text-slate-500">Composition data unavailable</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Global Profile Analysis</h4>
-              <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.originalProfileAnalysis || "N/A"}</p>
-            </div>
-            <div>
-              <h4 className="font-semibold text-slate-700 mb-1">Drilling Point Justification</h4>
-              <p className="text-sm leading-relaxed" style={{ color: '#334155' }}>{parsedData.processedProfileAnalysis || "N/A"}</p>
-            </div>
+            <img src={report.annotatedOriginalImage} alt="Professional Geological Report" className="w-full h-auto object-contain block" crossOrigin="anonymous" />
           </div>
         </div>
 

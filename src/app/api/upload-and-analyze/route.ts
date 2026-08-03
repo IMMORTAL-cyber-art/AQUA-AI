@@ -8,118 +8,7 @@ import { createWorker } from "tesseract.js";
 // =====================================================================
 // Helper: Draw tight polygons and labels
 // =====================================================================
-// =====================================================================
-// Helper: Draw water zones
-// =====================================================================
-function drawWaterZones(
-  ctx: any,
-  zones: any[],
-  scale: number
-) {
-  for (const f of zones) {
-    if (!f.polygon || f.polygon.length < 6) continue;
-    const radiusX = (f.maxX - f.minX) / 2;
-    const radiusY = (f.maxY - f.minY) / 2;
-    const centerX = f.minX + radiusX;
-    const centerY = f.minY + radiusY;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-    ctx.strokeStyle = "rgba(255, 255, 0, 1)"; // Yellow oval
-    ctx.lineWidth = 3 * scale;
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-// =====================================================================
-// Helper: Draw interpretation panel (Right side)
-// =====================================================================
-function drawInterpretationPanel(
-  ctx: any,
-  width: number,
-  scale: number,
-  fontStack: string,
-  totalAnomalies: number,
-  bestDepthStr: string,
-  recommendedZone: any
-) {
-  const panelW = 320 * scale;
-  const panelH = 170 * scale;
-  const panelX = width - panelW - 30 * scale;
-  const panelY = 50 * scale;
-
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-  ctx.fillRect(panelX, panelY, panelW, panelH);
-  
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-  ctx.lineWidth = 1 * scale;
-  ctx.strokeRect(panelX, panelY, panelW, panelH);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = `bold ${18 * scale}px ${fontStack}`;
-  ctx.fillText("GEOLOGICAL REPORT", panelX + 20 * scale, panelY + 40 * scale);
-
-  ctx.font = `${14 * scale}px ${fontStack}`;
-  ctx.fillText(`Anomalies Detected: ${totalAnomalies}`, panelX + 20 * scale, panelY + 70 * scale);
-  
-  if (recommendedZone) {
-    ctx.fillText(`Primary Target: ${recommendedZone.id}`, panelX + 20 * scale, panelY + 100 * scale);
-    ctx.fillText(`Drilling Depth: ${bestDepthStr}`, panelX + 20 * scale, panelY + 125 * scale);
-    ctx.fillText(`Surrounding: ${recommendedZone.rockSurrounding}`, panelX + 20 * scale, panelY + 150 * scale);
-  } else {
-    ctx.fillText("No primary target identified.", panelX + 20 * scale, panelY + 100 * scale);
-  }
-  
-  ctx.restore();
-}
-
-// =====================================================================
-// Helper: Draw legend (Bottom left)
-// =====================================================================
-function drawLegend(ctx: any, height: number, scale: number, fontStack: string) {
-  const panelW = 280 * scale;
-  const panelH = 90 * scale;
-  const panelX = 30 * scale;
-  const panelY = height - panelH - 30 * scale;
-
-  ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-  ctx.fillRect(panelX, panelY, panelW, panelH);
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-  ctx.lineWidth = 1 * scale;
-  ctx.strokeRect(panelX, panelY, panelW, panelH);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = `bold ${14 * scale}px ${fontStack}`;
-  ctx.fillText("LEGEND", panelX + 15 * scale, panelY + 25 * scale);
-
-  ctx.font = `${13 * scale}px ${fontStack}`;
-  
-  // Yellow oval icon
-  ctx.beginPath();
-  ctx.ellipse(panelX + 25 * scale, panelY + 42 * scale, 8 * scale, 4 * scale, 0, 0, 2 * Math.PI);
-  ctx.strokeStyle = "rgba(255, 255, 0, 1)";
-  ctx.lineWidth = 2 * scale;
-  ctx.stroke();
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText("Detected Anomaly", panelX + 45 * scale, panelY + 47 * scale);
-
-  // Green line icon
-  ctx.beginPath();
-  ctx.moveTo(panelX + 25 * scale, panelY + 62 * scale);
-  ctx.lineTo(panelX + 25 * scale, panelY + 76 * scale);
-  ctx.strokeStyle = "rgba(0, 255, 0, 1)";
-  ctx.lineWidth = 3 * scale;
-  ctx.stroke();
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText("Best Drilling Line", panelX + 45 * scale, panelY + 73 * scale);
-
-  ctx.restore();
-}
+// Removed geology overlays to comply with strict single-line output requirements
 
 // =====================================================================
 // Helper: Draw drilling line
@@ -162,10 +51,9 @@ function drawDrillingLine(
   const sLine = pixelToSurveyLine(recommendedZone.centroidX);
   
   ctx.font = `bold ${18 * scale}px ${fontStack}`;
-  const lines = ["BEST DRILLING LINE", sLine, `Depth ${depthStr}`];
-  const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
-  const boxW = maxW + 24 * scale;
-  const boxH = 75 * scale;
+  const label = "BEST DRILLING LINE";
+  const boxW = ctx.measureText(label).width + 24 * scale;
+  const boxH = 40 * scale;
   
   // Position label directly above the map, aligned horizontally with the green line
   let boxX = bestBorewellX - (boxW / 2);
@@ -178,10 +66,7 @@ function drawDrillingLine(
   ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.fillStyle = "#00ff00";
-  ctx.fillText(lines[0], boxX + (boxW - ctx.measureText(lines[0]).width) / 2, boxY + 24 * scale);
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText(lines[1], boxX + (boxW - ctx.measureText(lines[1]).width) / 2, boxY + 46 * scale);
-  ctx.fillText(lines[2], boxX + (boxW - ctx.measureText(lines[2]).width) / 2, boxY + 68 * scale);
+  ctx.fillText(label, boxX + (boxW - ctx.measureText(label).width) / 2, boxY + 28 * scale);
   ctx.restore();
 }
 
@@ -334,10 +219,7 @@ export async function POST(req: NextRequest) {
     const aOrigCanvas = createCanvas(width, height);
     const aOrigCtx = aOrigCanvas.getContext("2d");
     aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    drawWaterZones(aOrigCtx, waterZones, scale);
     drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth, pixelToSurveyLine);
-    drawInterpretationPanel(aOrigCtx, width, scale, fontStack, waterZones.length, bestDepthStr, recommendedZone);
-    drawLegend(aOrigCtx, height, scale, fontStack);
     const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
     // IMAGE 3 & 4: Processed Maps (Omitted from UI as requested)
