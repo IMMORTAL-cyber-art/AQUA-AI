@@ -241,36 +241,17 @@ Return ONLY a JSON object matching this exact structure (no markdown, no explana
       };
     });
 
-    // IMAGE 2: Annotated Original Profile (Omitted to avoid duplicate images)
-    const annotatedOriginalImageUrl = null;
+    // IMAGE 2: Annotated Original Profile
+    const aOrigCanvas = createCanvas(width, height);
+    const aOrigCtx = aOrigCanvas.getContext("2d");
+    aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
+    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack);
+    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
+    const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
-    // IMAGE 3: Processed Detection Map
-    const procCanvas = createCanvas(width, height);
-    const procCtx = procCanvas.getContext("2d");
-    const procImgData = procCtx.createImageData(width, height);
-    for (let i = 0; i < pixelMap.length; i++) {
-      const type = pixelMap[i];
-      const p = i * 4;
-      if (type === 1) {          // Soft Rock → Green
-        procImgData.data[p] = 34;  procImgData.data[p+1] = 197; procImgData.data[p+2] = 94;  procImgData.data[p+3] = 255;
-      } else if (type === 2) {   // Hard Rock → Orange
-        procImgData.data[p] = 234; procImgData.data[p+1] = 138; procImgData.data[p+2] = 36;  procImgData.data[p+3] = 255;
-      } else if (type === 3) {   // Water Gap → Deep Blue
-        procImgData.data[p] = 30;  procImgData.data[p+1] = 64;  procImgData.data[p+2] = 175; procImgData.data[p+3] = 255;
-      } else {                   // Background → Light grey
-        procImgData.data[p] = 240; procImgData.data[p+1] = 240; procImgData.data[p+2] = 240; procImgData.data[p+3] = 255;
-      }
-    }
-    procCtx.putImageData(procImgData, 0, 0);
-    const processedImageUrl = `data:image/png;base64,${procCanvas.toBuffer("image/png").toString("base64")}`;
-
-    // IMAGE 4: Annotated Processed Map
-    const aProcCanvas = createCanvas(width, height);
-    const aProcCtx = aProcCanvas.getContext("2d");
-    aProcCtx.drawImage(procCanvas, 0, 0, width, height);
-    drawWaterZones(aProcCtx, waterZones, pixelToDepth, scale, fontStack);
-    drawDrillingLine(aProcCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth);
-    const annotatedProcessedImageUrl = `data:image/png;base64,${aProcCanvas.toBuffer("image/png").toString("base64")}`;
+    // IMAGE 3 & 4: Processed Maps (Omitted from UI as requested)
+    const processedImageUrl = null;
+    const annotatedProcessedImageUrl = null;
 
     let bestDepthStr = "No reliable drilling point detected.";
     let startDepth = "N/A";
