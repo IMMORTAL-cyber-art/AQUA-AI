@@ -8,33 +8,6 @@ import { createWorker } from "tesseract.js";
 // =====================================================================
 // Helper: Draw tight polygons and labels
 // =====================================================================
-function drawWaterZones(
-  ctx: any,
-  zones: any[],
-  pixelToDepth: (y: number) => string | number,
-  scale: number,
-  fontStack: string,
-  pixelToSurveyLine: (x: number) => string
-) {
-  for (const f of zones) {
-    if (!f.polygon || f.polygon.length < 6) continue;
-
-    const radiusX = (f.maxX - f.minX) / 2;
-    const radiusY = (f.maxY - f.minY) / 2;
-    const centerX = f.minX + radiusX;
-    const centerY = f.minY + radiusY;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-    ctx.strokeStyle = "rgba(0, 255, 0, 1)"; // Green oval
-    ctx.lineWidth = 3 * scale;
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-// =====================================================================
 // Helper: Draw drilling line
 // =====================================================================
 function drawDrillingLine(
@@ -227,22 +200,12 @@ export async function POST(req: NextRequest) {
       composition
     } as any;
 
-    const mappedFeatures = waterZones.map(f => {
-      const d1 = pixelToDepth(f.minY);
-      const d2 = pixelToDepth(f.maxY);
-      return {
-        ...f,
-        points: undefined,
-        surveyLine: pixelToSurveyLine(f.centroidX),
-        depthRange: (d1 !== -1 && d2 !== -1) ? `${d1}m - ${d2}m` : "Unavailable",
-      };
-    });
+    const mappedFeatures: any[] = [];
 
     // IMAGE 2: Annotated Original Profile
     const aOrigCanvas = createCanvas(width, height);
     const aOrigCtx = aOrigCanvas.getContext("2d");
     aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    drawWaterZones(aOrigCtx, waterZones, pixelToDepth, scale, fontStack, pixelToSurveyLine);
     drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth, pixelToSurveyLine);
     const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
 
