@@ -324,7 +324,8 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       let minX = x, maxX = x, minY = y, maxY = y;
       let sumX = 0, sumY = 0;
       let enclosedArea = 0;
-      let cavitySize = 0;
+      let blueCount = 0;
+      let greenCount = 0;
       const points: number[] = [];
       const componentPixels = new Set<number>();
 
@@ -334,9 +335,9 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         points.push(cx, cy);
         componentPixels.add(cIdx);
         enclosedArea++;
-        if (aquiferMask[cIdx] === 1) {
-          cavitySize++;
-        }
+        if (pixelMap[cIdx] === 3) blueCount++;
+        if (pixelMap[cIdx] === 1) greenCount++;
+        
         sumX += cx;
         sumY += cy;
 
@@ -392,8 +393,9 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       }
 
       // Filter E: Rock enclosure check (must be surrounded mostly, >=75%, by soft/hard rock)
-      let rockNeighbors = 0;
       let totalNeighbors = 0;
+      let orangeNeighbors = 0;
+      let greenNeighbors = 0;
       for (const cIdx of componentPixels) {
         const cx = cIdx % width;
         const cy = Math.floor(cIdx / width);
@@ -406,14 +408,17 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
             if (!componentPixels.has(nIdx)) {
               totalNeighbors++;
               const neighborColor = pixelMap[nIdx];
-              if (neighborColor === 1 || neighborColor === 2) {
-                rockNeighbors++;
-              }
+              if (neighborColor === 2) orangeNeighbors++;
+              if (neighborColor === 1) greenNeighbors++;
             }
           }
         }
       }
+      
+      const rockNeighbors = orangeNeighbors + greenNeighbors;
       const rockRatio = totalNeighbors > 0 ? rockNeighbors / totalNeighbors : 0;
+      const orangeRatio = totalNeighbors > 0 ? orangeNeighbors / totalNeighbors : 0;
+      
       if (rockRatio < 0.75) {
         console.log(`[Debug Log] Cavity candidate at Y: ${minY}-${maxY} ignored: rock enclosure ratio too low (${(rockRatio*100).toFixed(1)}% < 75%)`);
         continue;
@@ -421,31 +426,28 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
 
       validCavities.push({
         enclosedArea,
-        cavitySize,
-        minX,
-        maxX,
-        minY,
-        maxY,
-        centroidX,
-        centroidY,
-        verticalThickness,
-        horizontalWidth,
-        rockRatio,
-        points
+        blueCount,
+        greenCount,
+        minX, maxX, minY, maxY,
+        centroidX, centroidY,
+        verticalThickness, horizontalWidth,
+        points, rockRatio, orangeRatio
       });
     }
   }
 
-  // STEP 5: Merge nearby fracture cavities (continuity merge) with 4% height threshold
   console.log(`[Debug Log] Unmerged valid cavities: ${validCavities.length}`);
+
+  // STEP 5: Merge vertically overlapping cavities
   const mergedCavities: any[] = [];
-  const cavityMerged = new Array(validCavities.length).fill(false);
-  const mergeThreshold = height * 0.04;
+  const cavityMerged = new Uint8Array(validCavities.length);
+  const mergeThreshold = 30; // merge if within 30 pixels vertically
 
   for (let i = 0; i < validCavities.length; i++) {
     if (cavityMerged[i]) continue;
-    let merged = { ...validCavities[i], points: [...validCavities[i].points] };
-    cavityMerged[i] = true;
+    const merged = { ...validCavities[i] };
+    merged.points = [...validCavities[i].points];
+    cavityMerged[i] = 1;
 
     let changed = true;
     while (changed) {
@@ -459,7 +461,8 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
           if (xOverlap > 0 && yDist < mergeThreshold) {
             merged.points.push(...target.points);
             merged.enclosedArea += target.enclosedArea;
-            merged.cavitySize += target.cavitySize;
+            merged.blueCount += target.blueCount;
+            merged.greenCount += target.greenCount;
             merged.minX = Math.min(merged.minX, target.minX);
             merged.maxX = Math.max(merged.maxX, target.maxX);
             merged.minY = Math.min(merged.minY, target.minY);
@@ -469,7 +472,8 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
             merged.verticalThickness = merged.maxY - merged.minY;
             merged.horizontalWidth = merged.maxX - merged.minX;
             merged.rockRatio = (merged.rockRatio + target.rockRatio) / 2;
-            cavityMerged[j] = true;
+            merged.orangeRatio = (merged.orangeRatio + target.orangeRatio) / 2;
+            cavityMerged[j] = 1;
             changed = true;
           }
         }
@@ -478,36 +482,32 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     mergedCavities.push(merged);
   }
 
-  // STEP 6: Geological Scoring
-  const maxPossibleThickness = cropHeight;
-  const maxPossibleDistance = Math.min(cropWidth / 2, cropHeight / 2);
-
+  // STEP 6: Geological Point Scoring Rules
+  const LARGE_AREA_THRESHOLD = 5000;
+  const VERTICAL_THRESHOLD = 150;
+  
   const scoredCorridors = mergedCavities.map(c => {
-    const distanceFromBorder = Math.min(c.minX - startX, endX - c.maxX, c.minY - startY, endY - c.maxY);
+    let score = 0;
+    
+    // - Blue cavity: +100
+    if (c.blueCount > 50) score += 100;
+    
+    // - Green fracture: +70
+    if (c.greenCount > 50) score += 70;
+    
+    // - Large connected area: +40
+    if (c.enclosedArea > LARGE_AREA_THRESHOLD) score += 40;
+    
+    // - Continuous vertical fracture: +30
+    if (c.verticalThickness > VERTICAL_THRESHOLD) score += 30;
+    
+    // - Inside orange hard rock: -40
+    if (c.orangeRatio > 0.6) score -= 40;
+    
+    // - Tiny isolated region: -30
+    if (c.enclosedArea < 1500) score -= 30;
 
-    // 1. Enclosure score
-    const enclosureScore = c.rockRatio * 100;
-    // 2. Fracture continuity
-    const continuityScore = (c.verticalThickness / maxPossibleThickness) * 100;
-    // 3. Shape Quality (favor vertical elongation over wide strips)
-    const shapeScore = Math.min(100, (c.verticalThickness / (c.horizontalWidth + 1)) * 50);
-    // 4. Distance From Border
-    const borderDistanceScore = (distanceFromBorder / maxPossibleDistance) * 100;
-    // 5. Vertical consistency (water pixel density)
-    const consistencyScore = (c.cavitySize / c.enclosedArea) * 100;
-
-    // final geological score = 30% enclosure + 30% continuity + 15% shape quality + 15% consistency + 10% border distance
-    const score = 0.3 * enclosureScore + 0.3 * continuityScore + 0.15 * shapeScore + 0.15 * consistencyScore + 0.1 * borderDistanceScore;
-
-    return {
-      ...c,
-      enclosureScore,
-      continuityScore,
-      shapeScore,
-      borderDistanceScore,
-      consistencyScore,
-      score
-    };
+    return { ...c, score };
   });
 
   scoredCorridors.sort((a, b) => b.score - a.score);
@@ -515,38 +515,23 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   console.log(`[Debug Log] Total valid merged corridors: ${scoredCorridors.length}`);
   scoredCorridors.forEach((c, idx) => {
     console.log(`- Corridor #${idx + 1}: Y: ${c.minY}-${c.maxY} (X: ${c.minX}-${c.maxX}), Centroid: (${c.centroidX.toFixed(1)}, ${c.centroidY.toFixed(1)})`);
-    console.log(`  * Rock Enclosure: ${c.enclosureScore.toFixed(1)}%`);
-    console.log(`  * Continuity: ${c.continuityScore.toFixed(1)}%`);
-    console.log(`  * Shape Quality: ${c.shapeScore.toFixed(1)}%`);
-    console.log(`  * Vertical Consistency: ${c.consistencyScore.toFixed(1)}%`);
-    console.log(`  * Distance From Border: ${c.borderDistanceScore.toFixed(1)}%`);
-    console.log(`  * Final Geological Score: ${c.score.toFixed(3)}`);
+    console.log(`  * Blue Pixels: ${c.blueCount}`);
+    console.log(`  * Green Pixels: ${c.greenCount}`);
+    console.log(`  * Final Geological Score: ${c.score}`);
   });
 
   const waterZones: GeologicalFeature[] = [];
 
-  if (scoredCorridors.length > 0) {
-    scoredCorridors.forEach((c, idx) => {
-      // Rock above search top block
-      let hardAbove = 0, softAbove = 0;
-      const searchTop = Math.max(startY, c.minY - 40);
-      for (let y = searchTop; y < c.minY; y++) {
-        for (let x = c.minX; x <= c.maxX; x++) {
-          const type = pixelMap[y * width + x];
-          if (type === 2) hardAbove++;
-          if (type === 1) softAbove++;
-        }
-      }
+  // 7. Label only meaningful water zones (Score > 0)
+  const meaningfulCorridors = scoredCorridors.filter(c => c.score > 0);
 
-      // Rock inside count
-      let softCount = 0;
-      let hardCount = 0;
-      for (let i = 0; i < c.points.length; i += 2) {
-        const type = pixelMap[c.points[i+1] * width + c.points[i]];
-        if (type === 1) softCount++;
-        if (type === 2) hardCount++;
-      }
-
+  if (meaningfulCorridors.length > 0) {
+    // 8. Choose the highest scoring region as the single Best Drilling Point
+    // (Only label the top 1 since the user requested "Draw only ONE Best Drilling Point", but wait, "Label only meaningful water zones" means we can list others as zones, but only 1 drilling point)
+    // Actually the prompt says "Draw only ONE Best Drilling Point. Label only meaningful water zones."
+    // We'll mark the first one as recommended=true, the rest as recommended=false.
+    
+    meaningfulCorridors.forEach((c, idx) => {
       // Concave hull points
       const hullPoints: number[][] = [];
       const step = Math.max(1, Math.floor(c.points.length / 500));
@@ -557,13 +542,8 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
       const flatHull: number[] = [];
       for (const p of hull) flatHull.push(p[0], p[1]);
 
-      // Confidence calculation using: rock enclosure, continuity, shape, consistency
-      const confidence = Math.min(100, Math.floor(
-        c.enclosureScore * 0.3 +
-        c.continuityScore * 0.35 +
-        c.shapeScore * 0.18 +
-        c.consistencyScore * 0.17
-      ));
+      // Map rock surrounding description
+      const rockSurrounding = c.orangeRatio > 0.5 ? "Hard Rock Dominant" : "Soft Rock Dominant";
 
       waterZones.push({
         id: `Water Zone ${idx + 1}`,
@@ -573,16 +553,17 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         centroidX: c.centroidX,
         centroidY: c.centroidY,
         score: c.score,
-        confidence,
-        recommended: idx === 0,
-        colorType: "black",
+        confidence: Math.min(100, Math.max(0, c.score)), // Convert score directly to confidence visual
+        recommended: idx === 0, // ONLY the first (highest scoring) is the Best Drilling Point
+        colorType: c.blueCount > c.greenCount ? "blue" : "green",
         polygon: flatHull,
         priority: idx + 1,
         verticalThickness: c.verticalThickness,
         horizontalWidth: c.horizontalWidth,
-        rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
+        rockAbove: "Unknown",
         rockBelow: "Unknown", 
-        rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
+        rockSurrounding: rockSurrounding
+
       });
     });
   }
