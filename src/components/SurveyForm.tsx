@@ -17,6 +17,7 @@ const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/web
 
 const formSchema = z.object({
   customerName: z.string().min(2, "Name must be at least 2 characters"),
+  maxDepth: z.string().or(z.number()),
   image: z
     .any()
     .refine((files) => files?.length === 1, "Image is required.")
@@ -46,6 +47,7 @@ export function SurveyForm({ onSuccess }: { onSuccess: (data: any) => void }) {
       
       const formData = new FormData();
       formData.append("customerName", values.customerName);
+      formData.append("maxDepth", values.maxDepth.toString());
       formData.append("image", values.image[0]);
 
       setProgress(40);
@@ -110,6 +112,24 @@ export function SurveyForm({ onSuccess }: { onSuccess: (data: any) => void }) {
               />
               {errors.customerName && (
                 <p className="text-sm text-red-500">{errors.customerName.message as string}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="maxDepth" className="text-sm font-semibold text-slate-700">
+                Max Depth (m)
+              </Label>
+              <Input
+                id="maxDepth"
+                type="number"
+                placeholder="150"
+                className="w-full"
+                defaultValue={150}
+                {...register("maxDepth")}
+                disabled={isUploading}
+              />
+              {errors.maxDepth && (
+                <p className="text-sm text-red-500">{errors.maxDepth.message as string}</p>
               )}
             </div>
 

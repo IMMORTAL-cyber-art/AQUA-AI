@@ -157,7 +157,7 @@ function erode(mask: Uint8Array, width: number, height: number, radius: number):
   return out;
 }
 
-export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number): VisionResult {
+export function detectGeologicalFeatures(imageData: ImageData, width: number, height: number, maxDepth: number = 150): VisionResult {
   const data = imageData.data;
   const totalPixels = width * height;
   
@@ -286,21 +286,21 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
     }
   }
 
-  // Create binary mask of blue/water pixels inside the cropped region
-  const blueMask = new Uint8Array(totalPixels);
+  // Create binary mask of aquifer (fracture/water) pixels inside the cropped region
+  const aquiferMask = new Uint8Array(totalPixels);
   for (let y = startY; y < endY; y++) {
     const rowStart = y * width;
     for (let x = startX; x < endX; x++) {
       const idx = rowStart + x;
-      if (pixelMap[idx] === 3) {
-        blueMask[idx] = 1;
+      if (pixelMap[idx] === 3 || pixelMap[idx] === 1) { // 3=Water, 1=Fracture/Soft Rock
+        aquiferMask[idx] = 1;
       }
     }
   }
 
   // STEP 3: Morphological Closing with radius=1 to avoid giant merges
-  console.log("[Morphological Closing] Performing closing on blue water mask (radius=1)...");
-  const dilated = dilate(blueMask, width, height, 1);
+  console.log("[Morphological Closing] Performing closing on aquifer mask (radius=1)...");
+  const dilated = dilate(aquiferMask, width, height, 1);
   const closedMask = erode(dilated, width, height, 1);
 
   // STEP 4: Extract connected components (BFS)
@@ -334,7 +334,7 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
         points.push(cx, cy);
         componentPixels.add(cIdx);
         enclosedArea++;
-        if (blueMask[cIdx] === 1) {
+        if (aquiferMask[cIdx] === 1) {
           cavitySize++;
         }
         sumX += cx;
@@ -526,64 +526,64 @@ export function detectGeologicalFeatures(imageData: ImageData, width: number, he
   const waterZones: GeologicalFeature[] = [];
 
   if (scoredCorridors.length > 0) {
-    const c = scoredCorridors[0];
-
-    // Rock above search top block
-    let hardAbove = 0, softAbove = 0;
-    const searchTop = Math.max(startY, c.minY - 40);
-    for (let y = searchTop; y < c.minY; y++) {
-      for (let x = c.minX; x <= c.maxX; x++) {
-        const type = pixelMap[y * width + x];
-        if (type === 2) hardAbove++;
-        if (type === 1) softAbove++;
+    scoredCorridors.forEach((c, idx) => {
+      // Rock above search top block
+      let hardAbove = 0, softAbove = 0;
+      const searchTop = Math.max(startY, c.minY - 40);
+      for (let y = searchTop; y < c.minY; y++) {
+        for (let x = c.minX; x <= c.maxX; x++) {
+          const type = pixelMap[y * width + x];
+          if (type === 2) hardAbove++;
+          if (type === 1) softAbove++;
+        }
       }
-    }
 
-    // Rock inside count
-    let softCount = 0;
-    let hardCount = 0;
-    for (let i = 0; i < c.points.length; i += 2) {
-      const type = pixelMap[c.points[i+1] * width + c.points[i]];
-      if (type === 1) softCount++;
-      if (type === 2) hardCount++;
-    }
+      // Rock inside count
+      let softCount = 0;
+      let hardCount = 0;
+      for (let i = 0; i < c.points.length; i += 2) {
+        const type = pixelMap[c.points[i+1] * width + c.points[i]];
+        if (type === 1) softCount++;
+        if (type === 2) hardCount++;
+      }
 
-    // Concave hull points
-    const hullPoints: number[][] = [];
-    const step = Math.max(1, Math.floor(c.points.length / 500));
-    for (let i = 0; i < c.points.length; i += 2 * step) {
-      hullPoints.push([c.points[i], c.points[i+1]]);
-    }
-    const hull = concaveman(hullPoints, 1, 10);
-    const flatHull: number[] = [];
-    for (const p of hull) flatHull.push(p[0], p[1]);
+      // Concave hull points
+      const hullPoints: number[][] = [];
+      const step = Math.max(1, Math.floor(c.points.length / 500));
+      for (let i = 0; i < c.points.length; i += 2 * step) {
+        hullPoints.push([c.points[i], c.points[i+1]]);
+      }
+      const hull = concaveman(hullPoints, 1, 10);
+      const flatHull: number[] = [];
+      for (const p of hull) flatHull.push(p[0], p[1]);
 
-    // Confidence calculation using: rock enclosure, continuity, shape, consistency
-    const confidence = Math.min(100, Math.floor(
-      c.enclosureScore * 0.3 +
-      c.continuityScore * 0.35 +
-      c.shapeScore * 0.18 +
-      c.consistencyScore * 0.17
-    ));
+      // Confidence calculation using: rock enclosure, continuity, shape, consistency
+      const confidence = Math.min(100, Math.floor(
+        c.enclosureScore * 0.3 +
+        c.continuityScore * 0.35 +
+        c.shapeScore * 0.18 +
+        c.consistencyScore * 0.17
+      ));
 
-    waterZones.push({
-      id: "Water Zone 1",
-      type: "Water Zone",
-      area: c.enclosedArea, 
-      minX: c.minX, maxX: c.maxX, minY: c.minY, maxY: c.maxY,
-      centroidX: c.centroidX,
-      centroidY: c.centroidY,
-      score: c.score,
-      confidence,
-      recommended: true,
-      colorType: "black",
-      polygon: flatHull,
-      priority: 1,
-      verticalThickness: c.verticalThickness,
-      horizontalWidth: c.horizontalWidth,
-      rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
-      rockBelow: "Unknown", 
-      rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
+      waterZones.push({
+        id: `Water Zone ${idx + 1}`,
+        type: "Water Zone",
+        area: c.enclosedArea, 
+        minX: c.minX, maxX: c.maxX, minY: c.minY, maxY: c.maxY,
+        centroidX: c.centroidX,
+        centroidY: c.centroidY,
+        score: c.score,
+        confidence,
+        recommended: idx === 0,
+        colorType: "black",
+        polygon: flatHull,
+        priority: idx + 1,
+        verticalThickness: c.verticalThickness,
+        horizontalWidth: c.horizontalWidth,
+        rockAbove: hardAbove > softAbove ? "Hard Rock" : (softAbove > hardAbove ? "Soft Rock" : "Mixed"),
+        rockBelow: "Unknown", 
+        rockSurrounding: softCount > hardCount ? "Soft Rock Dominant" : "Hard Rock Dominant"
+      });
     });
   }
 

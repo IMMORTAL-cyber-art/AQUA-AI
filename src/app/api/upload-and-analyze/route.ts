@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const customerName = formData.get("customerName") as string;
     const image = formData.get("image") as File;
+    const maxDepth = Number(formData.get("maxDepth")) || 150;
 
     if (!customerName || !image) {
       return NextResponse.json({ error: "Missing name or image" }, { status: 400 });
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
     cvCtx.drawImage(canvasImage, 0, 0, width, height);
     const imageData = cvCtx.getImageData(0, 0, width, height);
 
-    const { waterZones, pixelMap, cropStartY, cropEndY, composition } = detectGeologicalFeatures(imageData, width, height);
+    const { waterZones, pixelMap, cropStartY, cropEndY, composition } = detectGeologicalFeatures(imageData, width, height, maxDepth);
 
     const recommendedZone = waterZones.length > 0 ? waterZones[0] : null;
     const bestBorewellX = recommendedZone ? recommendedZone.centroidX : width / 2;
@@ -153,11 +154,10 @@ export async function POST(req: NextRequest) {
     const fontStack = "Inter, Roboto, Arial, Helvetica, 'Segoe UI', sans-serif";
 
     // --- DETERMINISTIC DEPTH SCALE CALIBRATION ---
-    // We assume the total depth is 150m.
-    console.log(`[Scale Calibration] Setting Y: ${cropStartY} -> ${cropEndY} to 0m -> 150m.`);
+    console.log(`[Scale Calibration] Setting Y: ${cropStartY} -> ${cropEndY} to 0m -> ${maxDepth}m.`);
     const depthScale = [
       { yPixel: cropStartY, depthValue: 0 },
-      { yPixel: cropEndY, depthValue: 150 }
+      { yPixel: cropEndY, depthValue: maxDepth }
     ];
     const validScale = true;
 
@@ -180,8 +180,8 @@ export async function POST(req: NextRequest) {
     let originalProfileAnalysis = "No geological features were identified in the scanned area.";
     let processedProfileAnalysis = "Unable to determine a suitable drilling point.";
     if (recommendedZone) {
-      originalProfileAnalysis = `Detected ${waterZones.length} valid water-bearing fracture zones. The features were extracted using deterministic pixel morphology with a 150m assumed depth scale.`;
-      processedProfileAnalysis = `Selected Water Zone 1 (score: ${recommendedZone.score.toFixed(1)}). The cavity is predominantly surrounded by ${recommendedZone.rockSurrounding} and spans a vertical thickness of ${recommendedZone.verticalThickness} pixels with a confidence of ${recommendedZone.confidence}%.`;
+      originalProfileAnalysis = `Detected ${waterZones.length} candidate aquifer zones. The features were extracted using deterministic pixel morphology with a ${maxDepth}m depth scale.`;
+      processedProfileAnalysis = `Selected ${recommendedZone.id} as the Best Drilling Point because it has the highest geological score (${recommendedZone.score.toFixed(1)}). It has a contiguous area of ${recommendedZone.area} pixels, spans a vertical thickness from ${pixelToDepth(recommendedZone.minY)}m to ${pixelToDepth(recommendedZone.maxY)}m, and is bounded by ${recommendedZone.rockSurrounding}.`;
     }
 
     const geminiJson = {

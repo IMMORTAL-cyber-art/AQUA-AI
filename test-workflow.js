@@ -13,6 +13,7 @@ async function testWorkflow() {
   // Create native FormData for Node 18+
   const form = new FormData();
   form.append('customerName', 'Integration Test User');
+  form.append('maxDepth', '150');
   
   // Convert buffer to File/Blob for native fetch
   const file = new File([buffer], 'test_image.png', { type: 'image/png' });
