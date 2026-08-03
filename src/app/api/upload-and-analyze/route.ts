@@ -8,7 +8,191 @@ import { createWorker } from "tesseract.js";
 // =====================================================================
 // Helper: Draw tight polygons and labels
 // =====================================================================
-// Removed geology overlays to comply with strict single-line output requirements
+
+// =====================================================================
+// Helper: Draw water zones
+// =====================================================================
+function drawWaterZones(ctx: any, zones: any[], scale: number, offsetY: number) {
+  for (const f of zones) {
+    if (!f.polygon || f.polygon.length < 6) continue;
+    const radiusX = (f.maxX - f.minX) / 2;
+    const radiusY = (f.maxY - f.minY) / 2;
+    const centerX = f.minX + radiusX;
+    const centerY = f.minY + radiusY + offsetY;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+    ctx.strokeStyle = "rgba(255, 255, 0, 0.9)"; // Yellow oval
+    ctx.lineWidth = 3 * scale;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// =====================================================================
+// Helper: Draw Top Bar
+// =====================================================================
+function drawTopBar(ctx: any, width: number, height: number, scale: number, fontStack: string) {
+  ctx.save();
+  ctx.fillStyle = "#1e3a8a"; // Deep blue
+  ctx.fillRect(0, 0, width, height);
+  
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `bold ${28 * scale}px ${fontStack}`;
+  ctx.fillText("PROFILE", 30 * scale, height / 2 + 10 * scale);
+  ctx.restore();
+}
+
+// =====================================================================
+// Helper: Draw Right Panel
+// =====================================================================
+function drawRightPanel(
+  ctx: any, 
+  startX: number, 
+  startY: number, 
+  panelW: number, 
+  panelH: number, 
+  scale: number, 
+  fontStack: string, 
+  waterZones: any[], 
+  recommendedZone: any
+) {
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(startX, startY, panelW, panelH);
+  
+  let currentY = startY + 40 * scale;
+  const paddingX = startX + 30 * scale;
+
+  ctx.fillStyle = "#1e293b";
+  ctx.font = `bold ${20 * scale}px ${fontStack}`;
+  ctx.fillText("INTERPRETATION CARDS", paddingX, currentY);
+  currentY += 40 * scale;
+
+  // Draw Best Drilling Line Card
+  if (recommendedZone) {
+    ctx.fillStyle = "#f0fdf4"; // Light green
+    ctx.fillRect(paddingX, currentY, panelW - 60 * scale, 120 * scale);
+    ctx.strokeStyle = "#22c55e";
+    ctx.lineWidth = 2 * scale;
+    ctx.strokeRect(paddingX, currentY, panelW - 60 * scale, 120 * scale);
+    
+    ctx.fillStyle = "#166534";
+    ctx.font = `bold ${16 * scale}px ${fontStack}`;
+    ctx.fillText("BEST DRILLING LINE", paddingX + 15 * scale, currentY + 30 * scale);
+    
+    ctx.fillStyle = "#15803d";
+    ctx.font = `${14 * scale}px ${fontStack}`;
+    ctx.fillText(`Target: ${recommendedZone.id}`, paddingX + 15 * scale, currentY + 60 * scale);
+    ctx.fillText(`Score: ${recommendedZone.score.toFixed(1)}`, paddingX + 15 * scale, currentY + 85 * scale);
+    
+    currentY += 140 * scale;
+  }
+
+  // Draw Top Water Zones
+  const topZones = waterZones.filter(z => z.id !== (recommendedZone?.id)).slice(0, 3);
+  const labels = ["FIRST WATER ZONE", "SECOND WATER ZONE", "THIRD WATER ZONE"];
+  
+  topZones.forEach((zone, idx) => {
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(paddingX, currentY, panelW - 60 * scale, 80 * scale);
+    ctx.strokeStyle = "#cbd5e1";
+    ctx.lineWidth = 1 * scale;
+    ctx.strokeRect(paddingX, currentY, panelW - 60 * scale, 80 * scale);
+    
+    ctx.fillStyle = "#334155";
+    ctx.font = `bold ${15 * scale}px ${fontStack}`;
+    ctx.fillText(labels[idx] || "WATER ZONE", paddingX + 15 * scale, currentY + 25 * scale);
+    
+    ctx.font = `${13 * scale}px ${fontStack}`;
+    ctx.fillText(`Score: ${zone.score.toFixed(1)}`, paddingX + 15 * scale, currentY + 50 * scale);
+    
+    currentY += 100 * scale;
+  });
+  
+  ctx.restore();
+}
+
+// =====================================================================
+// Helper: Draw Bottom Panel
+// =====================================================================
+function drawBottomPanel(
+  ctx: any, 
+  startY: number, 
+  panelW: number, 
+  panelH: number, 
+  scale: number, 
+  fontStack: string, 
+  bestDepthStr: string,
+  startDepth: string,
+  endDepth: string,
+  confidence: string
+) {
+  ctx.save();
+  ctx.fillStyle = "#f1f5f9";
+  ctx.fillRect(0, startY, panelW, panelH);
+  
+  const paddingX = 40 * scale;
+  let currentY = startY + 40 * scale;
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = `bold ${18 * scale}px ${fontStack}`;
+  ctx.fillText("INTERPRETATION", paddingX, currentY);
+  
+  currentY += 40 * scale;
+  ctx.font = `bold ${15 * scale}px ${fontStack}`;
+  
+  const colW = 200 * scale;
+  
+  ctx.fillStyle = "#475569";
+  ctx.fillText("BEST DRILLING LINE", paddingX, currentY);
+  ctx.fillStyle = "#22c55e"; // Green text for depth
+  ctx.fillText(bestDepthStr, paddingX, currentY + 25 * scale);
+
+  ctx.fillStyle = "#475569";
+  ctx.fillText("START DEPTH", paddingX + colW, currentY);
+  ctx.fillStyle = "#0f172a";
+  ctx.fillText(startDepth, paddingX + colW, currentY + 25 * scale);
+
+  ctx.fillStyle = "#475569";
+  ctx.fillText("END DEPTH", paddingX + colW * 2, currentY);
+  ctx.fillStyle = "#0f172a";
+  ctx.fillText(endDepth, paddingX + colW * 2, currentY + 25 * scale);
+
+  ctx.fillStyle = "#475569";
+  ctx.fillText("CONFIDENCE", paddingX + colW * 3, currentY);
+  ctx.fillStyle = "#8b5cf6"; // Purple text for confidence
+  ctx.fillText(confidence, paddingX + colW * 3, currentY + 25 * scale);
+
+  // Colour Legend
+  currentY += 70 * scale;
+  ctx.fillStyle = "#0f172a";
+  ctx.font = `bold ${15 * scale}px ${fontStack}`;
+  ctx.fillText("LEGEND", paddingX, currentY);
+  
+  // Yellow oval
+  ctx.beginPath();
+  ctx.ellipse(paddingX + 90 * scale, currentY - 5 * scale, 12 * scale, 6 * scale, 0, 0, 2 * Math.PI);
+  ctx.strokeStyle = "rgba(255, 255, 0, 1)";
+  ctx.lineWidth = 2 * scale;
+  ctx.stroke();
+  ctx.fillStyle = "#475569";
+  ctx.font = `${14 * scale}px ${fontStack}`;
+  ctx.fillText("Water Zone", paddingX + 115 * scale, currentY);
+
+  // Green line
+  ctx.beginPath();
+  ctx.moveTo(paddingX + 220 * scale, currentY - 12 * scale);
+  ctx.lineTo(paddingX + 220 * scale, currentY + 2 * scale);
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 4 * scale;
+  ctx.stroke();
+  ctx.fillText("Drilling Line", paddingX + 235 * scale, currentY);
+
+  ctx.restore();
+}
+
 
 // =====================================================================
 // Helper: Draw drilling line
@@ -22,7 +206,8 @@ function drawDrillingLine(
   scale: number,
   fontStack: string,
   pixelToDepth: (y: number) => string | number,
-  pixelToSurveyLine: (x: number) => string
+  pixelToSurveyLine: (x: number) => string,
+  offsetY: number
 ) {
   if (!recommendedZone) return;
 
@@ -40,8 +225,8 @@ function drawDrillingLine(
   ctx.beginPath();
   ctx.strokeStyle = "rgba(0, 255, 0, 1)";
   ctx.lineWidth = 6 * scale; // Thicker than survey grid lines
-  ctx.moveTo(bestBorewellX, surfaceY);
-  ctx.lineTo(bestBorewellX, recommendedZone.maxY);
+  ctx.moveTo(bestBorewellX, surfaceY + offsetY);
+  ctx.lineTo(bestBorewellX, recommendedZone.maxY + offsetY);
   ctx.stroke();
 
   // 2. Add Label
@@ -49,24 +234,26 @@ function drawDrillingLine(
   const d2 = pixelToDepth(recommendedZone.maxY);
   const depthStr = (d1 !== -1 && d2 !== -1) ? `${d1}m–${d2}m` : "Unknown";
   const sLine = pixelToSurveyLine(recommendedZone.centroidX);
-  
+  const lines = ["BEST DRILLING LINE", sLine];
   ctx.font = `bold ${18 * scale}px ${fontStack}`;
-  const label = "BEST DRILLING LINE";
-  const boxW = ctx.measureText(label).width + 24 * scale;
-  const boxH = 40 * scale;
+  const maxW = Math.max(...lines.map((l: string) => ctx.measureText(l).width));
+  const boxW = maxW + 24 * scale;
+  const boxH = 60 * scale;
   
   // Position label directly above the map, aligned horizontally with the green line
   let boxX = bestBorewellX - (boxW / 2);
   if (boxX < 0) boxX = 0;
   if (boxX + boxW > width) boxX = width - boxW;
   
-  let boxY = surfaceY - boxH - 10 * scale;
-  if (boxY < 0) boxY = 10 * scale; // Fallback if there is no room at the top
+  let boxY = surfaceY + offsetY - boxH - 10 * scale;
+  if (boxY < offsetY + 10 * scale) boxY = offsetY + 10 * scale;
 
   ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.fillStyle = "#00ff00";
-  ctx.fillText(label, boxX + (boxW - ctx.measureText(label).width) / 2, boxY + 28 * scale);
+  ctx.fillText(lines[0], boxX + (boxW - ctx.measureText(lines[0]).width) / 2, boxY + 24 * scale);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(lines[1], boxX + (boxW - ctx.measureText(lines[1]).width) / 2, boxY + 48 * scale);
   ctx.restore();
 }
 
@@ -215,12 +402,42 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // IMAGE 2: Annotated Original Profile
-    const aOrigCanvas = createCanvas(width, height);
-    const aOrigCtx = aOrigCanvas.getContext("2d");
-    aOrigCtx.drawImage(canvasImage, 0, 0, width, height);
-    drawDrillingLine(aOrigCtx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth, pixelToSurveyLine);
-    const annotatedOriginalImageUrl = `data:image/png;base64,${aOrigCanvas.toBuffer("image/png").toString("base64")}`;
+    // ==========================================================
+    // GENERATE PROFESSIONAL FULL-PAGE CANVAS REPORT
+    // ==========================================================
+    const topTitleHeight = 80 * scale;
+    const rightPanelWidth = 350 * scale;
+    const bottomPanelHeight = 220 * scale;
+
+    const reportWidth = width + rightPanelWidth;
+    const reportHeight = topTitleHeight + height + bottomPanelHeight;
+
+    const reportCanvas = createCanvas(reportWidth, reportHeight);
+    const ctx = reportCanvas.getContext("2d");
+
+    // 1. Draw Background
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, reportWidth, reportHeight);
+
+    // 2. Draw Top Title Bar
+    drawTopBar(ctx, reportWidth, topTitleHeight, scale, fontStack);
+
+    // 3. Draw Original PQWT Profile
+    ctx.drawImage(canvasImage, 0, topTitleHeight, width, height);
+
+    // 4. Draw Geological Overlay (Optional Geology)
+    drawWaterZones(ctx, waterZones, scale, topTitleHeight);
+
+    // 5. Draw Best Drilling Line
+    drawDrillingLine(ctx, recommendedZone, bestBorewellX, width, height, scale, fontStack, pixelToDepth, pixelToSurveyLine, topTitleHeight);
+
+    // 6. Draw Right Panel
+    drawRightPanel(ctx, width, topTitleHeight, rightPanelWidth, height, scale, fontStack, waterZones, recommendedZone);
+
+    // 7. Draw Bottom Panel
+    drawBottomPanel(ctx, topTitleHeight + height, reportWidth, bottomPanelHeight, scale, fontStack, bestDepthStr, startDepth, endDepth, geminiJson.confidence);
+
+    const annotatedOriginalImageUrl = `data:image/png;base64,${reportCanvas.toBuffer("image/png").toString("base64")}`;
 
     // IMAGE 3 & 4: Processed Maps (Omitted from UI as requested)
     const processedImageUrl = null;
